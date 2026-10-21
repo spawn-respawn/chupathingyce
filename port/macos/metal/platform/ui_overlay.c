@@ -18,6 +18,7 @@ are the controller's button icons (a texture array, a layer each).
 
 #include "port_config.h"
 #include "text_hires.h"
+#include "delta.h"
 #include "ui_font.h"
 #include "ui_overlay.h"
 
@@ -677,6 +678,22 @@ float ui_overlay_button(int button, float size, float x, float y, unsigned int c
 			UI_ALIGN_CENTER, fade(key ? 0x1A2230FF : 0xFFFFFFFF, share), label);
 		return width;
 	}
+}
+
+int ui_overlay_platform(int platform, float size, float x, float y, unsigned int color, int shadow)
+{
+	char text[4];
+	unsigned int glyph = 0xE100u + (unsigned int)platform;
+
+	if (platform <= 0 || platform >= NUMBER_OF_DELTA_PLATFORMS ||
+		!posix_ui_font_has(POSIX_UI_FONT_PLATFORMS, glyph))
+		return 0;
+	utf8(glyph, text);
+	if (shadow)
+		add_text(POSIX_UI_FONT_PLATFORMS, size, x + 0.8f, y + 1.0f, UI_ALIGN_CENTER,
+			fade(0x000000FF, (float)(color & 0xFF) / 255.0f * 0.7f), text);
+	add_text(POSIX_UI_FONT_PLATFORMS, size, x, y, UI_ALIGN_CENTER, color, text);
+	return 1;
 }
 
 /* ---------- bounded CPU atlas and layout (uploaded by native Metal) */

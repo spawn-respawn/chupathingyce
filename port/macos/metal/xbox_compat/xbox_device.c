@@ -38,6 +38,7 @@ Conventions carried over from the Xbox:
 #include "xbox_state.h"
 #include "metal_report.h"
 #include "halo_stereo.h"
+#include "ui_point.h"
 #include "halo_stereo_window.h"
 #include "halo_stereo_cutscene.h"
 #include "posix.h"
@@ -1518,7 +1519,7 @@ int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 /* a point in the window, as SDL reports it, in the menus' coordinates: the
 inverse of the letterboxed display blit at presentation, the screen's
 width and the menus' centering (halo_screen_ui_offset) */
-static void ui_point_from_window(float window_x, float window_y, short *x, short *y)
+static void metal_ui_point_from_window(float window_x, float window_y, short *x, short *y)
 {
 	struct render_target_entry *back_buffer = render_target_get(&device.back_buffer);
 	int window_width, window_height, pixel_width, pixel_height, width, height, left, top;
@@ -1546,6 +1547,24 @@ static void ui_point_from_window(float window_x, float window_y, short *x, short
 	*y = (short)floorf(screen_y);
 }
 
+BOOL halo_ui_point_to_window(short x, short y, float *window_x, float *window_y)
+{
+	struct ui_point_view view;
+	struct render_target_entry *back_buffer = render_target_get(&device.back_buffer);
+
+	if (!back_buffer || !window_x || !window_y)
+		return FALSE;
+	memset(&view, 0, sizeof(view));
+	platform_video_window_size(&view.window_width, &view.window_height);
+	platform_video_drawable_size(&view.pixel_width, &view.pixel_height);
+	view.target_width = (int)back_buffer->target.width;
+	view.target_height = (int)back_buffer->target.height;
+	view.gl_width = (int)back_buffer->target.gl_width;
+	view.gl_height = (int)back_buffer->target.gl_height;
+	view.screen_width = halo_screen_width();
+	return ui_point_to_window(&view, x, y, window_x, window_y) ? TRUE : FALSE;
+}
+
 int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 {
 	struct platform_ui_pointer state;
@@ -1555,8 +1574,8 @@ int halo_ui_pointer_update(int menus_active, struct halo_ui_pointer *pointer)
 	if (!menus_active || !device.gl_ready || !platform_ui_pointer_read(&state))
 		return 0;
 	memset(pointer, 0, sizeof(*pointer));
-	ui_point_from_window(state.x, state.y, &pointer->x, &pointer->y);
-	ui_point_from_window(state.click_x, state.click_y, &pointer->click_x, &pointer->click_y);
+	metal_ui_point_from_window(state.x, state.y, &pointer->x, &pointer->y);
+	metal_ui_point_from_window(state.click_x, state.click_y, &pointer->click_x, &pointer->click_y);
 	pointer->moved = state.moved != FALSE;
 	pointer->left_clicks = (unsigned char)(state.left_clicks < 255 ? state.left_clicks : 255);
 	pointer->right_clicks = (unsigned char)(state.right_clicks < 255 ? state.right_clicks : 255);
@@ -3226,7 +3245,7 @@ static void pixel_shader_base_key(struct nv2a_pixel_shader_key *key)
 		unsigned char alpha_kill[4], color_sign[4], fog_enable, fog_table_mode, count_samples;
 	} live;
 
-	memset(&live, 0, sizeof(live));
+	live = (struct pixel_key_inputs){ 0 };
 	live.texture_modes = D3D__RenderState[D3DRS_PSTEXTUREMODES];
 	live.alpha_test_function = D3D__RenderState[D3DRS_ALPHATESTENABLE] ? D3D__RenderState[D3DRS_ALPHAFUNC] : 0;
 	live.fog_enable = D3D__RenderState[D3DRS_FOGENABLE] != 0;
@@ -3238,9 +3257,10 @@ static void pixel_shader_base_key(struct nv2a_pixel_shader_key *key)
 		live.alpha_kill[stage] = D3D__TextureState[stage][D3DTSS_ALPHAKILL] == D3DTALPHAKILL_ENABLE;
 		live.color_sign[stage] = (unsigned char)((D3D__TextureState[stage][D3DTSS_COLORSIGN] >> 28) & 0xf);
 	}
-	memset(key, 0, sizeof(*key));
+	*key = (struct nv2a_pixel_shader_key){ 0 };
 	memcpy(key->combiner_state, D3D__RenderState, sizeof(key->combiner_state));
-	memset(&key->combiner_state[D3DRS_PSCONSTANT0_0], 0, 16 * sizeof(DWORD));
+	for (stage = 0; stage < 16; stage++)
+		key->combiner_state[D3DRS_PSCONSTANT0_0 + stage] = 0;
 	key->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT0] = 0;
 	key->combiner_state[D3DRS_PSFINALCOMBINERCONSTANT1] = 0;
 	key->texture_modes = live.texture_modes;
@@ -4558,6 +4578,14 @@ static void write_screenshot_channel(struct render_target_entry *target, const c
 static void write_screenshot(struct render_target_entry *target, const char *suffix)
 {
 	write_screenshot_channel(target, suffix, 0);
+}
+
+void halo_test_screenshot(void)
+{
+	struct render_target_entry *target = render_target_get(&device.back_buffer);
+
+	if (target)
+		write_screenshot(target, "");
 }
 
 /* a screenshot's BGRA pixels, rows from the top, as directory/frameNNNNN<suffix>.bmp */

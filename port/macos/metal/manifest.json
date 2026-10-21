@@ -13,6 +13,7 @@
     "d3d8_gl.c": {
       "with": "xbox_compat/xbox_device.c",
       "base": "8ad37dd499ae899e069d5b5422351712f1b551a7",
+      "seen": "d30d0a8263e39a97fef951756eb73e7f23df5212",
       "why": "The Xbox D3D8 device: the same D3DDevice_* entry points, translated to the Metal backend (renderer/gpu.h) instead of OpenGL."
     },
     "d3d8_resources.c": {
@@ -43,11 +44,13 @@
     "sdl_platform.c": {
       "with": "platform/sdl_platform.c",
       "base": "37d857cc0059cfa27d0f284658edc4e37d380ddb",
+      "seen": "8ffb0ffe21b3a63020de4981e26a9f1f1f18555c",
       "why": "A Metal window (SDL_WINDOW_METAL): no OpenGL context, swap interval or GL entry points."
     },
     "port_config.c": {
       "with": "platform/port_config.c",
       "base": "660a2f1eb25b8287bb7de45568e60633e80c3f3a",
+      "seen": "d44eaf9e0ef970727a4aebfa48091912c51e1e47",
       "upstream_base": "edfd05deca4af0a3a0f6dcc5985c7d6eea23cbc3",
       "why": "The Metal renderer's settings (debug.metal_*, display.* that only Metal reads)."
     },
@@ -59,11 +62,13 @@
     "ui_overlay.c": {
       "with": "platform/ui_overlay.c",
       "base": "27effc8c2f324e16bee9213aa5508bfb710a220b",
+      "seen": "b56ff45ced255addd883936c7b87ea4abff2119a",
       "why": "The overlay drawn into the Metal back buffer (renderer/metal_overlay.inc) instead of with GL calls."
     },
     "hud_hires.c": {
       "with": "platform/hud_hires.c",
       "base": "99a076dcd955acc44048b6505c98cb1c7c647eb8",
+      "seen": "1a8a695ce0cbd079d11ffbaf7b3a6484d65ecc8a",
       "why": "High-resolution HUD textures uploaded through the Metal backend."
     },
     "text_hires.c": {
@@ -164,6 +169,7 @@
     "platform.h": {
       "with": "platform/platform.h",
       "base": "ae1f6f7a6c0f6aef0a26fe17a44c4de0c66809da",
+      "seen": "d73ab243ca65e963d899896a50d685a25b7c6159",
       "why": "Adds the Metal front-end hooks (platform_renderer_metal, platform_fixed_timestep)."
     },
     "port_config.h": {
@@ -216,6 +222,8 @@
   "not_provided": {
     "comment": "Symbols the upstream files above define that the Metal build deliberately does not.",
     "text_hires_font_file": "Player font files (display.high_res_font, text_hires.c): not ported to the Metal build yet; it draws the built-in fonts.",
+    "config_new_defaults_pending": "The Metal port's config adapter does not migrate commented defaults interactively; its settings are read and written by the native Metal config implementation.",
+    "config_new_defaults_answer": "The Metal port's config adapter does not migrate commented defaults interactively; its settings are read and written by the native Metal config implementation.",
     "xgpu_compile_shader": "GLSL compilation (d3d8_gl.c); Metal compiles MSL in renderer/gpu_metal.m.",
     "xgpu_link_program": "GLSL program linking (d3d8_gl.c); Metal pipelines in renderer/gpu_metal.m.",
     "xgpu_gl_state_invalidate": "OpenGL state tracking (d3d8_gl.c); the Metal encoder state cache is renderer/metal_state_cache.h.",
