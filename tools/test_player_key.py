@@ -54,6 +54,7 @@ static int crypto_ready = 1;
 static void posix_browser_lock(void) {}
 static void posix_browser_unlock(void) {}
 static void set_up(void) {}
+static void platform_log(const char *format, ...) { (void)format; }
 static int psa_generate_random(unsigned char *key, size_t size)
 {
 	memset(key, 0x5a, size);
