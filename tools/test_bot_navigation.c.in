@@ -1,0 +1,180 @@
+#include <assert.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "engine_ai/surface_navigation.h"
+#include "features/bots/bot_movement.h"
+#include "features/bots/bot_route_solver_ce.h"
+typedef int boolean;
+typedef float real;
+typedef struct { real x,y,z; } real_point3d;
+#define TRUE 1
+#define FALSE 0
+#define NONE -1
+#define TICKS_PER_SECOND 30
+#define BOT_NAVIGATION_PROGRESS_TICKS 30
+#define BOT_NAVIGATION_TICKS_PER_METRE 30
+#define BOT_NAVIGATION_REPLAN_DISTANCE 12
+#define BOT_NAVIGATION_BLOCK_LOOKAHEAD 6
+#define BOT_NAVIGATION_WAYPOINT_LOOKAHEAD 6
+#define BOT_NAVIGATION_ROUTE_OBSTACLES 0
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#define PIN(x,a,b) ((x)<(a)?(a):((x)>(b)?(b):(x)))
+#define TEST_FLAG(x,b) ((x)&(1u<<(b)))
+#define _biped_airborne_bit 0
+#define square_root sqrtf
+#define arctangent atan2f
+#define BOT_NAVIGATION_REQUEST_TICKS 3
+struct engine_ai_rng32_state;
+/* HEADER */
+static struct sn_resource resource;
+static struct sn_point position;
+static long now=100;
+static int clear=1,projectable=1,checks,searches;
+static uint32_t floor_polygon;
+static struct { struct { unsigned flags; } biped; } biped;
+static long game_time_get(void) { return now; }
+#define biped_get(u) ((void)(u), &biped)
+static void platform_log(char const *format, ...) { (void)format; }
+static struct sn_point bot_nav_position(long unit) { assert(unit==100); return position; }
+static struct sn_resource const *navigation_world_resource(void) { return &resource; }
+bool sn_route_current(struct sn_route const *r,struct sn_resource const *world,uint64_t revision) {
+    assert(world==&resource && revision==0); return r->count>0 && r->revision==1;
+}
+enum sn_status sn_project(struct sn_resource const *r,struct sn_point p,
+    uint32_t *polygon,struct sn_point *projected) {
+    assert(r==&resource); *polygon=floor_polygon; *projected=p;
+    return projectable ? SN_FOUND : SN_BAD_START;
+}
+static bool navigation_world_search_clear(void *context,struct sn_point a,uint32_t ap,
+    struct sn_point b,uint32_t bp) {
+    assert(*(long *)context==100); (void)a;(void)b;assert(ap==bp);checks++;return clear;
+}
+static bool navigation_world_polygon_blocked(uint32_t polygon) { (void)polygon;return false; }
+static bool navigation_world_occupant_clear(void *c,struct sn_point a,uint32_t ap,
+    struct sn_point b,uint32_t bp) { (void)c;(void)a;(void)ap;(void)b;(void)bp;return true; }
+static bool navigation_world_jump_clear(long u,struct sn_point a,struct sn_point b) {
+    (void)u;(void)a;(void)b;return false;
+}
+void bot_navigation_agent_reset_path(struct bot_navigation_agent *a) {
+    a->searching=a->following=a->goal_valid=FALSE;a->route.count=0;
+}
+static boolean bot_nav_refresh(struct bot_navigation_agent *a,struct sn_point p,struct sn_point g) {
+    (void)a;(void)p;(void)g;return FALSE;
+}
+static uint64_t solver_token;
+static enum sn_status solver_status=SN_RUNNING;
+static struct sn_route solver_route;
+bool bot_route_solver_ce_active(uint32_t client,uint64_t token) {
+    assert(client==0);return token && token==solver_token;
+}
+uint64_t bot_route_solver_ce_begin(uint32_t client,long unit,struct sn_resource const *r,
+    struct sn_point start,struct sn_point goal,bool check_goal) {
+    assert(client==0 && unit==100 && r==&resource);(void)start;(void)goal;(void)check_goal;
+    searches++;solver_status=SN_RUNNING;return ++solver_token;
+}
+enum sn_status bot_route_solver_ce_poll(uint32_t client,uint64_t token,long unit,
+    struct sn_resource const *r,struct sn_route *route,struct sn_jobs_diagnostics *d) {
+    assert(client==0 && token==solver_token && unit==100 && r==&resource && d);
+    *route=solver_route;return solver_status;
+}
+static void bot_nav_log_failure(struct bot_navigation_agent *a,struct sn_resource const *r,
+    enum sn_status status,struct sn_jobs_diagnostics const *d) {
+    assert(a && r==&resource && status!=SN_FOUND && d);
+}
+static enum bot_navigation_result bot_nav_stuck(struct bot_navigation_agent *a,
+    struct sn_resource const *r,struct sn_point p,boolean patrol,char const *reason) {
+    (void)a;(void)r;(void)p;(void)patrol;(void)reason;assert(0);return BOT_NAVIGATION_FAILED;
+}
+/* FUNCTIONS */
+static void route(struct bot_navigation_agent *a) {
+    memset(a,0,sizeof(*a));a->route.revision=1;a->route.count=4;a->bot_number=1;
+    a->route.points[0].x=0;a->route.points[1].x=2;
+    a->route.points[2].x=4;a->route.points[3].x=6;
+    a->progress_tick=now;a->waypoint_deadline=NONE;
+    a->jump_waypoint=SN_NONE;a->following=TRUE;a->waypoint=1;
+    a->goal=a->route.points[3];a->reach_distance_squared=0.2025f;
+    memset(&position,0,sizeof(position));clear=projectable=1;floor_polygon=0;checks=0;
+}
+int main(void) {
+    struct bot_navigation_agent a;
+    struct bot_navigation_command command={0};
+    struct sn_point goal;
+    route(&a);position.x=3;
+    a.jump_active=a.jump_airborne=TRUE;a.occupant_wait_ticks=99;
+    assert(bot_nav_install(&a,100,&resource,position));
+    assert(a.waypoint==2 && a.following && !a.jump_active && !a.jump_airborne);
+    assert(a.occupant_wait_ticks==0 && a.waypoint_deadline==NONE && checks<=6);
+    route(&a);position.x=3;clear=0;
+    assert(bot_nav_install(&a,100,&resource,position) && a.waypoint==1);
+    route(&a);position.x=3;floor_polygon=1;
+    assert(bot_nav_install(&a,100,&resource,position) && a.waypoint==1 && checks==0);
+    route(&a);a.route.count=0;
+    assert(!bot_nav_install(&a,100,&resource,position) && !a.following);
+    route(&a);a.route.count=SN_WAYPOINTS_MAX+1;
+    assert(!bot_nav_install(&a,100,&resource,position));
+    route(&a);a.route.revision=2;
+    assert(!bot_nav_install(&a,100,&resource,position));
+    /* The old passed-corner shortcut is gone; normal bots use a 3D metric. */
+    route(&a);position.x=2.6f;position.z=0.8f;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==1);
+    route(&a);position.x=2.6f;clear=0;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==1 && checks==0);
+    route(&a);position.x=2.6f;floor_polygon=1;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==1 && checks==0);
+    route(&a);position.x=2.6f;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==1 && command.has_move && command.speed==1.f);
+    /* Active profile thresholds are already squared, not squared twice. */
+    route(&a);a.reach_distance_squared=0.25f;position.x=2.49f;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==2);
+    route(&a);position.x=2.4f;position.z=0.3f;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==1); /* XY alone would have accepted this point */
+    /* Close objective radii must not stall in an endless endpoint replan. */
+    route(&a);a.waypoint=3;position.x=5.8f;goal=a.goal;
+    assert(bot_nav_route_step(&a,100,goal,1.f,0.1f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(command.has_move && a.waypoint==3 && searches==0);
+    /* Dense points cannot spend unbounded collision/projection work in a tick. */
+    route(&a);a.route.count=10;
+    memset(a.route.points,0,sizeof(a.route.points));
+    position.x=0;
+    assert(bot_nav_follow(&a,100,&resource,position,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_MOVING);
+    assert(a.waypoint==2); /* exactly ONE point per native bot update */
+    /* A target moved only 2m: keep the route until its end, then replan,
+       rather than telling an objective leaf to wait at the old endpoint. */
+    route(&a);a.waypoint=3;position.x=6;goal=a.goal;goal.x=8;
+    assert(bot_nav_route_step(&a,100,goal,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_WAITING);
+    assert(a.searching && searches==1 && a.goal.x==8);
+    position.x=8;
+    assert(bot_nav_route_step(&a,100,goal,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_ARRIVED);
+    /* A projected endpoint on another floor is likewise not objective arrival. */
+    route(&a);a.waypoint=3;position.x=6;goal=a.goal;goal.z=1;
+    assert(bot_nav_route_step(&a,100,goal,1.f,0.5f,FALSE,&command)==BOT_NAVIGATION_WAITING);
+    assert(searches==2);
+    route(&a);a.waypoint=3;a.patrol_goal=TRUE;position.x=6;goal=a.goal;
+    assert(bot_nav_route_step(&a,100,goal,1.f,0.5f,TRUE,&command)==BOT_NAVIGATION_ARRIVED);
+    assert(searches==2);
+    /* Allocation/waiting is not a usable installed route. */
+    now=100;searches=0;route(&a);a.following=FALSE;
+    assert(bot_nav_search(&a,100,&resource,position)==BOT_NAVIGATION_WAITING);
+    assert(a.searching && !a.following && searches==1);
+    now=101;
+    assert(bot_nav_search(&a,100,&resource,position)==BOT_NAVIGATION_WAITING);
+    solver_status=SN_FOUND;solver_route.count=0;now=102;
+    assert(bot_nav_search(&a,100,&resource,position)==BOT_NAVIGATION_FAILED && !a.following);
+    assert(bot_nav_search(&a,100,&resource,position)==BOT_NAVIGATION_WAITING && searches==1);
+    now=103;
+    assert(bot_nav_search(&a,100,&resource,position)==BOT_NAVIGATION_WAITING && searches==2);
+    route(&a);solver_route=a.route;a.following=FALSE;a.searching=TRUE;a.search_token=solver_token;
+    solver_status=SN_FOUND;
+    assert(bot_nav_search(&a,100,&resource,position)==BOT_NAVIGATION_MOVING && a.following);
+    assert(!a.searching && a.waypoint==1 && a.jump_waypoint==SN_NONE);
+    puts("Bot request timer, installation, native progression and live-goal arrival passed");
+    return 0;
+}

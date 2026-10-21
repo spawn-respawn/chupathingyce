@@ -12,8 +12,9 @@
   "replaced": {
     "d3d8_gl.c": {
       "with": "xbox_compat/xbox_device.c",
-      "base": "8ad37dd499ae899e069d5b5422351712f1b551a7",
-      "why": "The Xbox D3D8 device: the same D3DDevice_* entry points, translated to the Metal backend (renderer/gpu.h) instead of OpenGL."
+      "base": "d30d0a8263e39a97fef951756eb73e7f23df5212",
+      "seen": "681f31df76f250b7cd97b8210e9c6fc79e047a65",
+      "why": "The Xbox D3D8 device: the same D3DDevice_* entry points, translated to the Metal backend (renderer/gpu.h) instead of OpenGL. The acknowledged updates add console GL-layer/window hooks, not used by macOS Metal."
     },
     "d3d8_resources.c": {
       "with": "xbox_compat/xbox_resources.c",
@@ -28,7 +29,8 @@
     "xbox_textures.c": {
       "with": "xbox_compat/xbox_textures.c",
       "base": "0aff3050462887f944e03457b4b8dd09fedd7bc8",
-      "why": "Xbox texture decoding and caching, uploaded through the Metal backend; per-stage texture lookup cache."
+      "seen": "888aa999cdeb164de1c0b6213fe3d88c7be3e97e",
+      "why": "Xbox texture decoding and caching, uploaded through the Metal backend; per-stage texture lookup cache. The acknowledged update byte-swaps big-endian console texels; macOS Metal is little-endian."
     },
     "nv2a_vsh.c": {
       "with": "shaders/nv2a_vertex.c",
@@ -42,34 +44,37 @@
     },
     "sdl_platform.c": {
       "with": "platform/sdl_platform.c",
-      "base": "37d857cc0059cfa27d0f284658edc4e37d380ddb",
+      "base": "8ffb0ffe21b3a63020de4981e26a9f1f1f18555c",
       "why": "A Metal window (SDL_WINDOW_METAL): no OpenGL context, swap interval or GL entry points."
     },
     "port_config.c": {
       "with": "platform/port_config.c",
-      "base": "660a2f1eb25b8287bb7de45568e60633e80c3f3a",
-      "upstream_base": "edfd05deca4af0a3a0f6dcc5985c7d6eea23cbc3",
-      "why": "The Metal renderer's settings (debug.metal_*, display.* that only Metal reads)."
+      "base": "95428fe959a472c45ba67712e6f1d8a99f999ae8",
+      "upstream_base": "e01e714c01ec4c28c87551e3ee737776a63b7805",
+      "why": "The Metal renderer's own settings (debug.metal_*, display.* that only Metal reads); every other setting is upstream's, as upstream has it (tests/test_metal_settings_parity.py)."
     },
     "menu_files.c": {
       "with": "platform/menu_files.c",
       "base": "ce79552927201ca676ca6ee71da391e4d6a5c05c",
-      "why": "Menu art as backend textures (gpu_texture_*) instead of GL textures."
+      "seen": "8ca33f06d08090114bc587cc2974a4094a531d7a",
+      "why": "Menu art as backend textures (gpu_texture_*) instead of GL textures. The acknowledged additions support Switch-only XML art and console-hosted art, not used by Metal."
     },
     "ui_overlay.c": {
       "with": "platform/ui_overlay.c",
-      "base": "27effc8c2f324e16bee9213aa5508bfb710a220b",
+      "base": "81c23cf4aeedea5e1b56135a59a2e6c151faaee1",
       "why": "The overlay drawn into the Metal back buffer (renderer/metal_overlay.inc) instead of with GL calls."
     },
     "hud_hires.c": {
       "with": "platform/hud_hires.c",
-      "base": "99a076dcd955acc44048b6505c98cb1c7c647eb8",
-      "why": "High-resolution HUD textures uploaded through the Metal backend."
+      "base": "1a8a695ce0cbd079d11ffbaf7b3a6484d65ecc8a",
+      "seen": "4802f31dea4f4c590296531243d115af24a32d4c",
+      "why": "High-resolution HUD textures uploaded through the Metal backend. The acknowledged additions are guarded by HALO_CONSOLE_HOST_ART for Switch host rendering."
     },
     "text_hires.c": {
       "with": "platform/text_hires.c",
       "base": "e1186e7d3c029b8a62ffbd555f0b12fa42a56bfa",
-      "why": "The high-resolution text atlas as a backend texture instead of a GL texture."
+      "seen": "f9e2a42342f04c85ea2626491b7422b2dc712a12",
+      "why": "The high-resolution text atlas as a backend texture instead of a GL texture. The acknowledged atlas-row API is guarded by HALO_CONSOLE_HOST_ART for Switch host rendering."
     }
   },
   "dropped": {
@@ -79,7 +84,8 @@
     },
     "xgpu_shader_cache.c": {
       "base": "db13a024ad22759a7cd9abec930b56982e96bf52",
-      "why": "GLSL program cache; Metal keeps pipelines in a binary archive and warms shader lists (renderer/gpu_metal.m)."
+      "seen": "02139a3c0f390b19db3151a57000da2131882bcb",
+      "why": "GLSL program cache; Metal keeps pipelines in a binary archive and warms shader lists (renderer/gpu_metal.m). The acknowledged failure cache is guarded by HALO_CONSOLE_GL_LAYER."
     }
   },
   "shared": {
@@ -90,10 +96,15 @@
       "browser_ping.c",
       "build_identity.c",
       "cabinet.c",
+      "clan_emblem.c",
+      "controller_layout.c",
       "ce_installer.c",
       "crash_report.c",
       "delta.c",
+      "delta_compat.c",
+      "delta_profile.c",
       "delta_chat.c",
+      "delta_chat_bridge.c",
       "delta_chat_words.c",
       "delta_maps.c",
       "delta_peer.c",
@@ -105,12 +116,14 @@
       "event_log.c",
       "event_upload.c",
       "gl_functions.c",
+      "gametype_folder.c",
       "halo_linker_common.c",
       "log_address.c",
       "map_archive.c",
       "map_art.c",
       "map_download.c",
       "map_file_hash.c",
+      "map_report.c",
       "memory_watch.c",
       "msvc_crt.c",
       "msvc_wide.c",
@@ -133,6 +146,7 @@
       "save_folder.c",
       "touch_input.c",
       "touch_menu.c",
+      "ui_point.c",
       "update_manifest.c",
       "update_signature.c",
       "updater.c",
@@ -156,8 +170,9 @@
     },
     "platform.h": {
       "with": "platform/platform.h",
-      "base": "ae1f6f7a6c0f6aef0a26fe17a44c4de0c66809da",
-      "why": "Adds the Metal front-end hooks (platform_renderer_metal, platform_fixed_timestep)."
+      "base": "d73ab243ca65e963d899896a50d685a25b7c6159",
+      "seen": "e89c91e18c3374216fc3b6a3c2003e6bd2c60965",
+      "why": "Adds the Metal front-end hooks (platform_renderer_metal, platform_fixed_timestep). The acknowledged window-rebase and guest-memory hooks are for 32-bit console builds, not 64-bit macOS."
     },
     "port_config.h": {
       "with": "platform/port_config.h",
@@ -167,12 +182,14 @@
     "hud_hires.h": {
       "with": "platform/hud_hires.h",
       "base": "a008016ca8e53bfcaf093ed7a7aaffe40f0b6761",
-      "why": "Backend texture handles instead of GL names."
+      "seen": "2803fbb431115bee9725870cfee1812173be43ab",
+      "why": "Backend texture handles instead of GL names. The acknowledged HUD-preload API is guarded by HALO_CONSOLE_HOST_ART for Switch host rendering."
     },
     "text_hires.h": {
       "with": "platform/text_hires.h",
       "base": "2f44b44d1daef0faad2c25c892bc6b6a557855e5",
-      "why": "Comment and declaration differences that follow text_hires.c."
+      "seen": "c05b12f3ebf0f299d0b9ababaaffdad11a3ab719",
+      "why": "Comment and declaration differences that follow text_hires.c. The acknowledged atlas-row API is guarded by HALO_CONSOLE_HOST_ART for Switch host rendering."
     }
   },
   "mac_only": {
@@ -209,6 +226,8 @@
   "not_provided": {
     "comment": "Symbols the upstream files above define that the Metal build deliberately does not.",
     "text_hires_font_file": "Player font files (display.high_res_font, text_hires.c): not ported to the Metal build yet; it draws the built-in fonts.",
+    "config_new_defaults_pending": "The Metal port's config adapter does not migrate commented defaults interactively; its settings are read and written by the native Metal config implementation.",
+    "config_new_defaults_answer": "The Metal port's config adapter does not migrate commented defaults interactively; its settings are read and written by the native Metal config implementation.",
     "xgpu_compile_shader": "GLSL compilation (d3d8_gl.c); Metal compiles MSL in renderer/gpu_metal.m.",
     "xgpu_link_program": "GLSL program linking (d3d8_gl.c); Metal pipelines in renderer/gpu_metal.m.",
     "xgpu_gl_state_invalidate": "OpenGL state tracking (d3d8_gl.c); the Metal encoder state cache is renderer/metal_state_cache.h.",

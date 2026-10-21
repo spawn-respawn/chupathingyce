@@ -14,36 +14,29 @@ should know (sightings of enemies). docs/bot_decisions.md has the design.
 
 #include "cseries/cseries.h"
 #include "math/real_math.h"
+#include "bot_ambitions.h"
 
 /* ---------- constants */
 
 enum
 {
-	BOT_AMBITIONS_MAXIMUM = 16,
+	BOT_AMBITIONS_MAXIMUM = BOT_AMBITION_CAPACITY,
 	/* team games have two teams; free for all shares nothing */
 	BOT_MANAGER_TEAMS = 2,
 	/* seats a vehicle's claims cover (bots.c considers no more) */
 	BOT_MANAGER_SEATS = 16,
 };
 
-/* what a bot may do with an ambition */
-enum bot_ambition_kind
-{
-	_bot_ambition_none = 0,
-	_bot_ambition_take, /* pick the object up (a flag, a ball) */
-	_bot_ambition_deliver, /* bring a carried object here (a flag stand) */
-	_bot_ambition_guard, /* stay near it against enemies (a flag at home) */
-	_bot_ambition_hold, /* stand inside it (a hill) */
-	_bot_ambition_hunt, /* kill whoever carries it (an enemy flag carrier) */
-	_bot_ambition_reach, /* touch it (a race flag) */
-	_bot_ambition_return, /* touch one's dropped flag; no inventory acquisition */
-	NUMBER_OF_BOT_AMBITION_KINDS
-};
-
 /* ---------- structures */
 
 struct bot_ambition
 {
+	struct bot_ambition_identity identity;
+	uint32_t include_bots;
+	uint32_t exclude_bots;
+	uint32_t specific_player;
+	uint32_t slot_limit;
+	boolean all_bots;
 	short kind;
 	short owner_team_index; /* NONE: nobody's */
 	short acting_team_index; /* port: the team assigned this objective duty */
@@ -72,10 +65,15 @@ void bot_manager_update(
 short bot_manager_ambition_count(
 	void);
 
-/* port: standard CTF goal selection. One claimant per team pursues each loose
-flag; other bots guard. Carriers always deliver, regardless of shared contacts. */
-boolean bot_manager_ctf_goal(long team_index, long player_index, short bot_number,
-	long unavailable_object_index, struct bot_ambition *goal);
+/* Recovered nearest-object lookup within ONE behavior's ambition kind.
+ * Peek never consumes slots. The selector claims only when trying that behavior.
+ * from is required; distance is Euclidean, not a navmesh route cost. */
+boolean bot_manager_find_ambition(long team_index, long player_index, short bot_number,
+	enum bot_ambition_kind kind, long unavailable_object_index, real_point3d const *from,
+	boolean claim, struct bot_ambition *goal);
+
+void bot_manager_release_goal(short bot_number, struct bot_ambition_identity const *expected);
+boolean bot_manager_goal_claimed(short bot_number, struct bot_ambition const *goal);
 
 /* NULL past the count */
 struct bot_ambition const *bot_manager_ambition_get(
@@ -150,7 +148,7 @@ void bot_manager_release_seat(
 	short seat_index,
 	short bot_number);
 
-/* every item and seat claim the bot holds */
+/* Every goal, item and seat claim the bot holds, including its old team scope. */
 void bot_manager_release_bot(
 	long team_index,
 	short bot_number);

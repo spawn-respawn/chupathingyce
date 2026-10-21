@@ -48,22 +48,27 @@ def test_ctf_snapshot_and_goals():
         "bot_manager_item_claimed_by_other", "bot_manager_release_item", "bot_manager_release_bot",
         "bot_manager_seat_key", "bot_manager_claim_seat", "bot_manager_seat_claimed_by_other",
         "bot_manager_vehicle_claimed_by_other", "bot_manager_release_seat",
-        "bot_manager_ctf_goal", "bot_manager_ctf_add", "bot_manager_ctf_observe", "bot_manager_publish_ctf", "bot_manager_publish_ambitions"))
+        "bot_manager_find_ambition", "bot_manager_release_goal", "bot_manager_goal_claimed", "bot_manager_ctf_add", "bot_manager_ctf_observe", "bot_manager_publish_ctf", "bot_manager_sync_ambitions", "bot_manager_publish_ambitions"))
     fixture = (ROOT / "tools/test_bot_ctf_snapshot.c.in").read_text()
     fixture = fixture.replace("/* HEADERS */", header("port/linux/include/halo_bot_objectives.h") +
                               header("source/features/bots/bot_manager.h"))
     fixture = fixture.replace("/* FUNCTIONS */", functions)
-    compile_fixture(fixture, "snapshot", ("source/engine_ai/claims.c",))
+    compile_fixture(fixture, "snapshot", ("source/engine_ai/claims.c", "source/features/bots/bot_ambitions.c",
+                    "source/features/bots/bot_decision.c", "source/features/bots/bot_goal_policy_ce.c",
+                    "source/engine_ai/utility.c"))
 
 
 def test_ctf_objective_execution():
     source = (ROOT / "source/features/bots/bots.c").read_text()
     functions = "\n".join(body(source, name) for name in (
-        "bots_navigation_requested", "bot_carries_flag", "bot_objective_release", "bot_update_objective", "bot_leaf_objective", "bot_keep_moving"))
+        "bots_navigation_requested", "bot_carries_flag", "bot_objective_release", "bot_objective_cancel", "bot_update_objective", "bot_leaf_objective", "bot_avoid_direction_clear", "bot_leaf_avoid", "bot_behavior_tick", "bot_keep_moving", "bot_score_objectives", "bot_behavior_ambition_gate"))
     fixture = (ROOT / "tools/test_bot_ctf_execution.c.in").read_text()
     fixture = fixture.replace("/* HEADERS */", header("source/features/bots/bot_manager.h"))
     fixture = fixture.replace("/* FUNCTIONS */", functions)
-    compile_fixture(fixture, "execution")
+    compile_fixture(fixture, "execution", ("source/features/bots/bot_ambitions.c",
+                    "source/features/bots/bot_decision.c", "source/features/bots/bot_goal_policy_ce.c",
+                    "source/features/bots/bot_movement.c", "source/features/bots/bot_profile.c",
+                    "source/engine_ai/utility.c"))
 
 
 def test_ctf_arrival_requires_correct_floor():
@@ -102,8 +107,8 @@ static enum bot_navigation_result bot_nav_search(struct bot_navigation_agent *a,
     assert(a && u==100 && r==&resource); (void)start; searches++; return BOT_NAVIGATION_WAITING;
 }
 static enum bot_navigation_result bot_nav_follow(struct bot_navigation_agent *a,long u,
-    struct sn_resource const *r,struct sn_point p,real speed,boolean patrol,struct bot_navigation_command *c) {
-    assert(a && u==100 && r==&resource && c); (void)p; (void)speed; (void)patrol; return BOT_NAVIGATION_MOVING;
+    struct sn_resource const *r,struct sn_point p,real speed,real arrival_distance,boolean patrol,struct bot_navigation_command *c) {
+    assert(a && u==100 && r==&resource && c); (void)p; (void)speed; (void)arrival_distance; (void)patrol; return BOT_NAVIGATION_MOVING;
 }
 /* FUNCTIONS */
 int main(void) {

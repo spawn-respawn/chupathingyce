@@ -24,11 +24,16 @@ class MetalOverlayTests(unittest.TestCase):
             temporary = Path(directory)
             harness = temporary / 'driver.c'
             harness.write_text(DRIVER)
+            # The overlay only needs the platform-count constant from delta.h;
+            # keep this isolated fixture from pulling in the Linux ABI wrappers.
+            (temporary / 'delta.h').write_text('#define NUMBER_OF_DELTA_PLATFORMS 64\n')
             for enabled in (True, False):
                 output = temporary / ('overlay-on' if enabled else 'overlay-off')
                 command = [compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror',
+                           '-Wno-nonportable-include-path',
                            '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-                           *[f'-I{d}' for d in include_flags()[1::2]], f'-I{ROOT / "port/linux/src"}',
+                           f'-I{temporary}', *[f'-I{d}' for d in include_flags()[1::2]],
+                           f'-I{ROOT / "port/linux/src"}',
                            str(source('ui_overlay.c')), str(harness), '-lm', '-o', str(output)]
                 if enabled:
                     command.append('-DHALO_GAME_BROWSER=1')
@@ -80,7 +85,7 @@ const unsigned int *const ui_prompt_icons[10] = {
     &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel,
     &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel
 };
-int platform_input_scheme(void) { return input_scheme; }
+int platform_prompt_scheme(void) { return input_scheme; }
 unsigned long config_changes(void) { return 0; }
 void platform_log(const char *format, ...) { (void)format; }
 int text_hires_font_file(int large, char *path, unsigned long size) { (void)large; (void)size; path[0] = 0; return 0; }

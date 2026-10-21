@@ -420,6 +420,7 @@ static boolean hud_bad_bitmap_reported = FALSE;
 
 /* Inspect the guarded caller's frame, not the return site of this helper.
  * A normal prologue would replace EBP and defeat the paired stack check. */
+#ifndef HALO_XBOX_CONSOLE
 __attribute__((noinline)) long get_return_eip(
 	void)
 {
@@ -436,12 +437,47 @@ __attribute__((noinline)) long get_return_eip(
 	return (long)(__INTPTR_TYPE__)__builtin_return_address(1);
 #endif
 }
+#else
+__declspec(naked) long get_return_eip(
+	void)
+{
+	__asm
+	{
+		mov eax, [ebp+4]
+		ret
+	}
+}
+#endif
 
 real hud_globals_get_scale(
 	boolean in_multiplayer)
 {
 	return 1.0f;
 }
+
+#ifdef HALO_CUSTOM_EDITION
+/* port: the scale of what the HUD draws from a bitmap group with no
+placement of its own to scale it (the HUD globals' digits, the waypoints'
+arrows, the triangle over teammates: hud.c): a bitmap group forcing the high resolution scale is drawn at half
+its size, and one with the 0.5 HUD scale at half that (the elements of HUD
+interfaces have it from their placements: ce_hud.c) */
+real hud_bitmap_group_scale(
+	long bitmap_group_index)
+{
+	real scale = 1.0f;
+
+	if (bitmap_group_index != NONE)
+	{
+		struct bitmap_group const *group = bitmap_group_get(bitmap_group_index);
+
+		if (TEST_FLAG(group->flags, _bitmap_group_force_hud_high_resolution_scale_bit))
+			scale *= 0.5f;
+		if (TEST_FLAG(group->flags, _bitmap_group_half_hud_scale_bit))
+			scale *= 0.5f;
+	}
+	return scale;
+}
+#endif
 
 void hud_retrieve_bitmap_and_bounding_rect(
 	long bitmap_group_index,
@@ -1088,8 +1124,10 @@ pixel32 get_flash_color(
 
 	csmemset(stack_buffer, 0x62, sizeof(stack_buffer));
 
+	/* port: the phase of the frame, not the tick
+	(port/linux/game/render_interpolation.c) */
 	flash_phase = (real)fmod(
-		(game_time_get() - reference_value) * (1.0f / TICKS_PER_SECOND),
+		render_interpolation_ticks_since(game_time_get(), reference_value) * (1.0f / TICKS_PER_SECOND),
 		hud_color->flash_period);
 	pixel32_to_real_argb_color(hud_color->color, &base_color);
 	pixel32_to_real_argb_color(hud_color->flash_color, &flash_color);
@@ -1319,6 +1357,7 @@ void hud_draw_bitmap(
 	return;
 }
 
+#ifndef HALO_XBOX_CONSOLE
 /* port: a screen wider than 640 widens the HUD's window, which the HUD's
 elements keep to by their corners (the ammo counter to the left edge). The
 zoomed view's elements (the sniper rifle's angle ticks and range numbers)
@@ -1378,6 +1417,7 @@ void hud_zoomed_layout_end(
 	render.camera.window_bounds = *saved_window_bounds;
 }
 
+#endif
 void hud_draw_static_element(
 	short local_player_index,
 	struct hud_absolute_placement_definition const *absolute_placement,
@@ -1954,6 +1994,11 @@ void hud_draw_numbers(
 			real decimal_point_width = (real)(numbers->fractional_digits ?
 				hud_number->decimal_point_width : 0);
 			real scale;
+#ifdef HALO_CUSTOM_EDITION
+			real digit_scale;
+#else
+#define digit_scale scale
+#endif
 			point2d origin;
 			point2d cursor;
 			short digit_index;
@@ -1967,6 +2012,11 @@ void hud_draw_numbers(
 				scale = hud_globals_get_scale(
 					TEST_FLAG(draw_flags, _hud_draw_in_multiplayer_bit));
 			}
+#ifdef HALO_CUSTOM_EDITION
+			/* port: the digits' bitmap drawn at its HUD scale, their spacing
+			(the HUD number's widths, in pixels of the screen) at the HUD's */
+			digit_scale = scale*hud_bitmap_group_scale(hud_number->number_bitmap.index);
+#endif
 
 			if (TEST_FLAG(numbers->number_flags, _hud_number_show_trailing_m_bit))
 			{
@@ -2048,7 +2098,7 @@ void hud_draw_numbers(
 						absolute_placement->corner,
 						&point,
 						clip,
-						scale,
+						digit_scale,
 						0.0f,
 						color,
 						bitmap_group->type == _bitmap_group_type_interface_bitmaps);
@@ -2089,7 +2139,7 @@ void hud_draw_numbers(
 							absolute_placement->corner,
 							&point,
 							clip,
-							scale,
+							digit_scale,
 							0.0f,
 							color,
 							bitmap_group->type == _bitmap_group_type_interface_bitmaps);
@@ -2124,7 +2174,7 @@ void hud_draw_numbers(
 							absolute_placement->corner,
 							&point,
 							clip,
-							scale,
+							digit_scale,
 							0.0f,
 							color,
 							bitmap_group->type == _bitmap_group_type_interface_bitmaps);
@@ -2161,7 +2211,7 @@ void hud_draw_numbers(
 						absolute_placement->corner,
 						&point,
 						clip,
-						scale,
+						digit_scale,
 						0.0f,
 						color,
 						bitmap_group->type == _bitmap_group_type_interface_bitmaps);
@@ -2194,12 +2244,15 @@ void hud_draw_numbers(
 						absolute_placement->corner,
 						&point,
 						clip,
-						scale,
+						digit_scale,
 						0.0f,
 						color,
 						bitmap_group->type == _bitmap_group_type_interface_bitmaps);
 				}
 			}
+#ifndef HALO_CUSTOM_EDITION
+#undef digit_scale
+#endif
 		}
 	}
 

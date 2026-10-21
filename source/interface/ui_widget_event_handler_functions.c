@@ -1052,7 +1052,11 @@ boolean network_game_client_add_player(
 	short controller_index);
 void playlist_profiles_enumerate_available_to_local_player_index(
 	short local_player_index,
+#if defined(__BIG_ENDIAN__) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+	word *profile_count,
+#else
 	long *profile_count,
+#endif
 	long *profile_indices);
 extern byte cached_variant_profile[0x144];
 static boolean new_campaign_chosen(
@@ -1331,6 +1335,11 @@ static boolean player_profile_save_changes(
 	struct widget_instance *widget,
 	struct event_record *event,
 	boolean *widget_deleted);
+/* the layout spinner's index that stands for a kept Bumper Jumper, or NONE */
+static long g_button_preset_kept_index = NONE;
+extern struct widget_instance *g_list_widget_watched;
+extern boolean g_list_widget_watched_stepped;
+
 static boolean player_profile_initialize_controller_settings(
 	struct widget_instance *widget,
 	struct event_record *event,
@@ -3386,7 +3395,13 @@ static boolean multiplayer_profiles_list_initialize(
 	profile_indices = widget->parameters.list.list_items;
 	if (profile_indices)
 	{
+#if defined(__BIG_ENDIAN__) || (defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
+		/* port: a word on a big-endian machine, as the count the
+		enumeration writes (a long's low half only on a little-endian one) */
+		word profile_count;
+#else
 		long profile_count;
+#endif
 
 		profile_count = 100;
 		playlist_profiles_enumerate_available_to_local_player_index(0, &profile_count, profile_indices);
@@ -4225,9 +4240,11 @@ static boolean player_profile_initialize_controller_settings(
 		switch (profile->controller_settings.button_preset)
 		{
 		case _button_preset_standard:
+			g_button_preset_kept_index = NONE;
 			option_spinner->parameters.list.selected_index = 0;
 			break;
 		case _button_preset_swap_triggers:
+			g_button_preset_kept_index = NONE;
 			option_spinner->parameters.list.selected_index = 1;
 			break;
 		case _button_preset_swap_a_and_left_trigger:
@@ -4238,6 +4255,20 @@ static boolean player_profile_initialize_controller_settings(
 			break;
 		case _button_preset_swap_b_and_right_thumb:
 			option_spinner->parameters.list.selected_index = 4;
+			break;
+		case _button_preset_bumper_jumper:
+		case _button_preset_custom:
+			/* (the Xbox's own list has the five layouts of its map: these are
+			shown in the PC and Chupathingy menus, and here as the default) */
+			option_spinner->parameters.list.selected_index =
+				profile->controller_settings.button_preset < option_spinner->parameters.list.number_of_items ?
+					profile->controller_settings.button_preset : 0;
+			/* (shown as the first layout; the stored choice is kept until the
+			player picks another one here) */
+			g_button_preset_kept_index =
+				profile->controller_settings.button_preset < option_spinner->parameters.list.number_of_items ? NONE : 0;
+			g_list_widget_watched = option_spinner;
+			g_list_widget_watched_stepped = FALSE;
 			break;
 		default:
 			option_spinner->parameters.list.selected_index = 0;
@@ -4870,6 +4901,13 @@ static boolean player_profile_change_controller_settings(
 		while (option_spinner && option_spinner->type != 2)
 			option_spinner = option_spinner->next;
 		match_vassert("c:\\halo\\SOURCE\\interface\\ui_widget_event_handler_functions.c", 3956, option_spinner, "expected 'button config' option spinner list");
+		/* (Bumper Jumper shown as the first layout on a list without it: left
+		as it is unless the player stepped the spinner, Default included) */
+		if (g_button_preset_kept_index != NONE &&
+			profile->controller_settings.button_preset >= _button_preset_bumper_jumper &&
+			g_list_widget_watched == option_spinner &&
+			!g_list_widget_watched_stepped)
+			return TRUE;
 		switch (option_spinner->parameters.list.selected_index)
 		{
 		case _button_preset_standard: profile->controller_settings.button_preset = _button_preset_standard; return TRUE;
@@ -4877,6 +4915,8 @@ static boolean player_profile_change_controller_settings(
 		case _button_preset_swap_a_and_left_trigger: profile->controller_settings.button_preset = _button_preset_swap_a_and_left_trigger; return TRUE;
 		case _button_preset_swap_b_and_left_trigger: profile->controller_settings.button_preset = _button_preset_swap_b_and_left_trigger; return TRUE;
 		case _button_preset_swap_b_and_right_thumb: profile->controller_settings.button_preset = _button_preset_swap_b_and_right_thumb; return TRUE;
+		case _button_preset_bumper_jumper: profile->controller_settings.button_preset = _button_preset_bumper_jumper; return TRUE;
+		case _button_preset_custom: profile->controller_settings.button_preset = _button_preset_custom; return TRUE;
 		default: error(2, "unknown button config option selected"); return TRUE;
 		}
 	}
@@ -5899,6 +5939,14 @@ static boolean multiplayer_profile_set_for_game(
 			fclose(file);
 		}
 		player_ui_set_game_variant(&profile);
+		/* port: and its PC options (a custom loadout, the vehicles: as the
+		PC menus' choice gives them, ui_widget_port_gametype_choose) */
+		{
+			struct game_variant_options options;
+
+			if (playlist_profile_get_options(profile_index, &options))
+				player_ui_set_game_variant_options(&options);
+		}
 		if (server)
 			network_game_server_change_game_variant(server, &profile);
 		return TRUE;
@@ -6011,8 +6059,9 @@ static boolean solo_level_initialize_list_single_player(
 	return TRUE;
 }
 
-#ifdef HALO_GAME_BROWSER
-/* port: Online Games (port/linux/game/browser_screen.c), as System Link's
+#if defined(HALO_GAME_BROWSER) || defined(HALO_CONSOLE_ONLINE_GAMES)
+/* port: Online Games (port/linux/game/browser_screen.c, and the console's
+port/xbox/game/xbox_browser_screen.c), as System Link's
 list: opened, the network searching for games (its list's "initialize net
 game server list"); Y, a game of this machine's (its "start network game
 server") */

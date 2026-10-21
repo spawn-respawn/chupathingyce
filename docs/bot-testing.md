@@ -28,6 +28,7 @@ python3 tools/test_engine_ai_traversal.py --sanitize
 python3 tools/test_bot_movement_log.py
 python3 tools/test_bot_validation_runner.py
 python3 tools/test_bot_awareness_log.py
+python3 tools/test_bot_navigation.py
 python3 tools/test_bot_perception_steering.py --sanitize
 python3 tools/test_bot_fire_safety.py --sanitize
 python3 -m pytest -q tools/test_bot_scenarios.py
@@ -42,6 +43,15 @@ git diff --check
 `--sanitize` enables AddressSanitizer and UndefinedBehaviorSanitizer;
 `--cc clang` selects the compiler on the Python C runners. A successful primitive
 test is not proof of live bot movement.
+
+### Route installation and movement
+
+`python3 tools/test_bot_navigation.py` runs the production installer, follower
+and request orchestration against a fake collision world with ASan/UBSan. It
+covers delayed-route rejoining, stale/empty routes, jump-state reset, corner
+clearance, floor separation, bounded point progression, small arrival radii,
+and replanning at an old endpoint instead of reporting current-goal arrival.
+It does not validate real BSP collision or live-match movement.
 
 ### Standard two-flag CTF
 

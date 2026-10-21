@@ -75,32 +75,32 @@ validation task, not a known outstanding cache defect.
   A deeper module split remains deferred. This is architectural debt, not a
   demonstrated rendering defect.
 
-## Outstanding source reconciliation
+## Source reconciliation
 
-The following 12 forks/shadow headers have acknowledged, unreconciled drift:
+This checkout includes `upstream/main` through `20578b5b4` (merge commit
+`9b7e4d410`). `python3 tools/metal_manifest.py check` reports no unacknowledged
+drift. The manifest's nine `seen` entries are reviewed console-only changes
+(window rebasing, Switch-hosted art, big-endian textures and GL-layer behavior)
+that do not apply to the 64-bit macOS Metal build; their reasons are recorded
+beside each entry. A new upstream source file must be classified in
+`manifest.json` before the Metal build will configure.
 
-- `d3d8_gl.c` → `xbox_compat/xbox_device.c`
-- `xbox_textures.c` → `xbox_compat/xbox_textures.c`
-- `nv2a_vsh.c` → `shaders/nv2a_vertex.c`
-- `nv2a_psh.c` → `shaders/nv2a_pixel.c`
-- `sdl_platform.c`, `port_config.c`, `hud_hires.c`, `text_hires.c` → `platform/`
-- `xgpu.h` → `xbox_compat/xgpu.h`
-- `platform.h`, `hud_hires.h`, `text_hires.h` → `platform/`
+The settings registry is held to upstream's by
+`port/macos/metal/tests/test_metal_settings_parity.py`: every environment-backed
+upstream setting is registered once, with upstream's type, environment
+variable and default (so the Metal build takes the same defaults, 2x
+multisampling, 256 shadow maps and anisotropic filtering off as on the Xbox).
+Console-only entries with a NULL environment variable are parsed and counted
+by the test but are not desktop settings. A setting only Metal registers must
+be read by something. A difference on purpose is named in that test with why;
+there are none.
 
-These are review obligations, **not 12 confirmed rendering bugs**. Initial
-historical baseline pins are content-history estimates, not reviewed merge
-bases. `seen` acknowledges the backlog without marking it reconciled.
+Further upstream changes can be previewed with the command below. Its list is
+a snapshot of the fetched `upstream/main`, not a permanent pin.
 
 ```sh
-python3 tools/metal_manifest.py check
 python3 tools/metal_manifest.py check --against upstream/main
 ```
-
-The fetched upstream preview additionally identifies five unclassified sources
-(`delta_chat.c`, `delta_chat_words.c`, `discord_activity.c`, `map_art.c`,
-`save_folder.c`) and further changes to `sdl_platform.c`, `port_config.c` and
-`ui_overlay.c`. No upstream merge or feature import was performed here; rerun the
-preview after fetching because this list is a snapshot, not a permanent pin.
 
 ## Validation still needed
 

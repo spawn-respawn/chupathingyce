@@ -86,6 +86,9 @@ symbols in this file:
 #include "game/players.h"
 #include "interface/hud.h"
 #include "interface/hud_definitions.h"
+#ifdef HALO_CUSTOM_EDITION
+#include "interface/hud_draw.h" /* port: hud_bitmap_group_scale */
+#endif
 #include "interface/hud_messaging.h"
 #include "interface/hud_unit.h"
 #include "interface/hud_weapon.h"
@@ -111,7 +114,7 @@ symbols in this file:
 #include "follow_camera.h" /* port: port/linux/game/follow_camera.c */
 #include "powerup_timers.h" /* port: port/linux/game/powerup_timers.c */
 #include "network_coop.h" /* port: port/linux/game/network_coop.c */
-#ifdef HALO_GAME_BROWSER
+#ifdef HALO_PORT_CHAT
 #include "chat.h" /* port: port/linux/game/chat.c */
 #endif
 #include "text/font_group.h"
@@ -953,7 +956,12 @@ static void hud_draw_friendly_indicator(
 				bitmap,
 				&position,
 				&clip,
+#ifdef HALO_CUSTOM_EDITION
+				/* port: at its bitmap's HUD scale */
+				hud_bitmap_group_scale(interface_get_tag_index(_interface_bitmap_multiplayer_hud)),
+#else
 				1.0f,
+#endif
 				0.0f,
 				1.0f);
 		}
@@ -970,8 +978,12 @@ static void hud_draw_players(
 
 	if (player_index != NONE)
 	{
+#ifndef HALO_XBOX_CONSOLE
 		/* the native builds' sessions hold more than 16 players */
 		long teammate_indices[HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
+#else
+		long teammate_indices[16];
+#endif
 		long teammate_count = 0;
 		struct data_iterator iterator;
 		struct player_datum *player;
@@ -984,9 +996,13 @@ static void hud_draw_players(
 				team_index == player->team_index &&
 				player->unit_index != NONE)
 			{
+#ifndef HALO_XBOX_CONSOLE
 				/* never write past the buffer, whatever the player data holds */
 				if (teammate_count < (long)NUMBEROF(teammate_indices))
 					teammate_indices[teammate_count++] = iterator.datum_index;
+#else
+				teammate_indices[teammate_count++] = iterator.datum_index;
+#endif
 			}
 		}
 
@@ -1001,6 +1017,7 @@ static void hud_draw_players(
 	return;
 }
 
+#ifndef HALO_CONSOLE_NO_PLAYER_NAMES
 /* port: in multiplayer and network co-op, players' names above their heads
 (display.player_names: "all", "allies", "enemies" or "none"). An ally's goes
 above the triangle the game draws over teammates; an enemy's only within the
@@ -1149,7 +1166,15 @@ static void hud_draw_player_name(
 			interface_get_tag_index(_interface_bitmap_multiplayer_hud), 0, 0);
 
 		if (bitmap)
+		{
+#ifdef HALO_CUSTOM_EDITION
+			/* (the triangle drawn at its bitmap's HUD scale) */
+			y -= (short)(bitmap->registration_point.y *
+				hud_bitmap_group_scale(interface_get_tag_index(_interface_bitmap_multiplayer_hud)));
+#else
 			y -= bitmap->registration_point.y;
+#endif
+		}
 	}
 	y -= 2;
 	font = font_definition_get(font_index);
@@ -1221,6 +1246,8 @@ static void hud_draw_player_names(
 
 	return;
 }
+
+#endif /* HALO_CONSOLE_NO_PLAYER_NAMES */
 
 static void temporary_hud_draw(
 	void)
@@ -1378,8 +1405,10 @@ void hud_draw_screen(
 		}
 
 		/* port: players' names above their heads, in multiplayer and network co-op */
+#ifndef HALO_CONSOLE_NO_PLAYER_NAMES
 		if ((game_engine_running() || network_coop_active()) && !cinematic_in_progress())
 			hud_draw_player_names();
+#endif
 		/* port: who a dead network co-op player is watching */
 		if (player->unit_index == NONE && coop_spectating() && !cinematic_in_progress())
 			coop_spectate_draw(render.local_player_index);
@@ -1393,7 +1422,7 @@ void hud_draw_screen(
 		/* port: the network co-op vote to skip a cinematic */
 		if (cinematic_in_progress())
 			coop_skip_vote_draw(render.local_player_index);
-#ifdef HALO_GAME_BROWSER
+#ifdef HALO_PORT_CHAT
 		/* port: text chat's lines (port/linux/game/chat.c) */
 		if (!cinematic_in_progress())
 			chat_draw(render.local_player_index);

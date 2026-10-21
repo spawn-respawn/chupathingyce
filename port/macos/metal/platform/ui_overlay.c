@@ -18,6 +18,7 @@ are the controller's button icons (a texture array, a layer each).
 
 #include "port_config.h"
 #include "text_hires.h"
+#include "delta.h"
 #include "ui_font.h"
 #include "ui_overlay.h"
 
@@ -31,7 +32,7 @@ void platform_log(const char *format, ...);
 
 /* (xinput_sdl.c: the device the player last used: 0 keyboard, 1 Xbox-like,
 2 PlayStation, 3 Nintendo) */
-int platform_input_scheme(void);
+int platform_prompt_scheme(void);
 
 /* the controller's button icons (port/assets/prompts, generated with the
 fonts by tools/embed_assets.py --fonts): A, B, X, Y, Start, LT, RT, LB, RB,
@@ -148,7 +149,7 @@ static const int button_fonts[4] =
 
 static int scheme(void)
 {
-	int value = platform_input_scheme();
+	int value = platform_prompt_scheme();
 
 	return value >= 0 && value < 4 ? value : 1;
 }
@@ -677,6 +678,28 @@ float ui_overlay_button(int button, float size, float x, float y, unsigned int c
 			UI_ALIGN_CENTER, fade(key ? 0x1A2230FF : 0xFFFFFFFF, share), label);
 		return width;
 	}
+}
+
+/* ---------- the platforms' logos */
+
+/* (platform_icons.ttf: one logo per platform of delta.h's registry, at
+U+E100 plus the platform's number; a platform without a logo in the font,
+and unknown, draw nothing) */
+#define PLATFORM_GLYPH_BASE 0xE100
+
+int ui_overlay_platform(int platform, float size, float x, float y, unsigned int color, int shadow)
+{
+	char text[4];
+	unsigned int glyph = PLATFORM_GLYPH_BASE + (unsigned int)platform;
+
+	if (platform <= 0 || platform >= NUMBER_OF_DELTA_PLATFORMS || !posix_ui_font_has(POSIX_UI_FONT_PLATFORMS, glyph))
+		return 0;
+	utf8(glyph, text);
+	if (shadow)
+		add_text(POSIX_UI_FONT_PLATFORMS, size, x + 0.8f, y + 1.0f, UI_ALIGN_CENTER,
+			fade(0x000000FF, (float)(color & 0xFF) / 255.0f * 0.7f), text);
+	add_text(POSIX_UI_FONT_PLATFORMS, size, x, y, UI_ALIGN_CENTER, color, text);
+	return 1;
 }
 
 /* ---------- bounded CPU atlas and layout (uploaded by native Metal) */

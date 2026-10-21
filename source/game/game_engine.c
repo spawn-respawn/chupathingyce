@@ -597,6 +597,7 @@ struct network_game *network_game_server_get_game(struct network_game_server *se
 #endif
 #ifdef HALO_GAME_BROWSER
 #include "../../port/linux/src/browser.h"
+#include "../../port/linux/src/ui_overlay.h"
 /* port/linux/game/game_stats.c's */
 void game_stats_player_killed(long killing_player_index, long dead_player_index, boolean friendly_fire);
 void game_stats_player_extra(long player_index, char *text, long size, short *multikills);
@@ -1751,21 +1752,26 @@ HUD's text, centred, on a panel (display.scoreboard_background). A team game's
 players in a column for each team (display.scoreboard_team_layout), else in
 order of score in one column, or two when one has too few rows; each with
 the player's ping in a network game (the host's measure:
-network_distributed.c). More players than a page are scrolled to with the
-mouse wheel and Page Up/Down (platform_scoreboard_scroll), a footer telling
-which are shown; opened, it shows the viewer's own player's page. Network
-co-op's campaign, with no game engine, lists its players as they joined,
-with only their names and pings. */
+network_distributed.c) and, before the name, the logo of the platform its
+client says it plays on over Delta Peer (display.scoreboard_platforms). More
+players than a page are scrolled to with the mouse wheel and Page Up/Down
+(platform_scoreboard_scroll), a footer telling which are shown; opened, it
+shows the viewer's own player's page. Network co-op's campaign, with no
+game engine, lists its players as they joined, with only their names and
+pings. */
 enum
 {
 	/* the rows' widths (in the scoreboard's text, before it is scaled):
 	place, name, score, ping (the last as wide as "Ping" or three digits,
-	so that the columns centred are their text centred) */
+	so that the columns centred are their text centred); and the platform
+	logos' between place and name, when a row has one */
 	SCOREBOARD_PLACE_WIDTH = 55,
+	SCOREBOARD_PLATFORM_WIDTH = 20,
 	SCOREBOARD_NAME_WIDTH = 150,
 	SCOREBOARD_SCORE_WIDTH = 95,
 	SCOREBOARD_PING_WIDTH = 40,
-	SCOREBOARD_COLUMN_WIDTH = SCOREBOARD_PLACE_WIDTH + SCOREBOARD_NAME_WIDTH + SCOREBOARD_SCORE_WIDTH + SCOREBOARD_PING_WIDTH,
+	SCOREBOARD_BASE_COLUMN_WIDTH = SCOREBOARD_PLACE_WIDTH + SCOREBOARD_NAME_WIDTH + SCOREBOARD_SCORE_WIDTH +
+		SCOREBOARD_PING_WIDTH,
 	SCOREBOARD_COLUMN_GAP = 40,
 	/* the rows a column has: as many as fit between 6 rows of the screen
 	from its top and 2 from its bottom (the motion sensor); the scoreboard
@@ -1780,6 +1786,11 @@ enum
 };
 
 #define SCOREBOARD_SCALE 0.75f
+
+/* the platform logos' column this frame: SCOREBOARD_PLATFORM_WIDTH when
+the scoreboard shows them, else 0 (the original layout) */
+static short scoreboard_platform_width = 0;
+#define SCOREBOARD_COLUMN_WIDTH (SCOREBOARD_BASE_COLUMN_WIDTH + scoreboard_platform_width)
 
 /* network_distributed.c's */
 long distributed_player_ping(short player_index);
@@ -1863,7 +1874,7 @@ static void scoreboard_draw_row(
 		color.blue = MIN(color.blue + 0.4f, 1.0f);
 	}
 	tab_stops[0] = left;
-	tab_stops[1] = (short)(left + SCOREBOARD_PLACE_WIDTH);
+	tab_stops[1] = (short)(left + SCOREBOARD_PLACE_WIDTH + scoreboard_platform_width);
 	tab_stops[2] = (short)(tab_stops[1] + SCOREBOARD_NAME_WIDTH);
 	tab_stops[3] = (short)(tab_stops[2] + SCOREBOARD_SCORE_WIDTH);
 	draw_string_set_tab_stops(tabs ? tab_stops : NULL, tabs ? 4 : 0);
@@ -1879,6 +1890,134 @@ static void scoreboard_draw_row(
 
 	return;
 }
+
+/* port: a player by their Delta profile's name, as long as the column (16
+characters) */
+#define SCOREBOARD_PROFILE_NAME_LENGTH 17
+#if defined(HALO_GAME_BROWSER) && !defined(HALO_CONSOLE_NO_DELTA_PROFILE)
+/* port/linux/game/profile_names.c's */
+boolean profile_names_player(long player_index, wchar_t *name, long size);
+#endif
+
+/* port: the name a scoreboard shows a player by: their Delta profile's when
+they share it (port/linux/game/profile_names.c; in buffer, as long as the
+column), else their own */
+static wchar_t const *scoreboard_player_name(
+	long player_index,
+	struct player_datum const *player,
+	wchar_t *buffer,
+	long size)
+{
+#if defined(HALO_GAME_BROWSER) && !defined(HALO_CONSOLE_NO_DELTA_PROFILE)
+	if (profile_names_player(DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index), buffer, size))
+		return buffer;
+#else
+	(void)player_index;
+	(void)buffer;
+	(void)size;
+#endif
+	return player->name;
+}
+
+#ifdef HALO_GAME_BROWSER
+/* menu_tags.c's: 0 the Xbox's menus, 1 Gearbox's, 2 the Chupathingy menus */
+short pc_menus_set(void);
+/* delta_peer_game.c's */
+int delta_peer_game_on_delta(void);
+int delta_peer_player_platform(int player_index);
+
+/* display.scoreboard_platforms: the menus whose look the logos take (as
+pc_menus_set), or NONE when they are not shown: "auto" with the
+Chupathingy menus only (the Xbox's and Gearbox's stay as the originals
+were), "on" with any, "off" never */
+static short scoreboard_platforms_style(
+	void)
+{
+	static unsigned long read_at = (unsigned long)-1;
+	static short style = NONE;
+
+	/* (read again when Settings changes it) */
+	if (read_at != config_changes())
+	{
+		char const *value = config_string("display.scoreboard_platforms");
+		short menus = pc_menus_set();
+
+		read_at = config_changes();
+		if (value && !csstrcmp(value, "off"))
+			style = NONE;
+		else if (value && !csstrcmp(value, "on"))
+			style = menus;
+		else
+			style = menus == 2 ? menus : NONE;
+	}
+
+	return style;
+}
+
+/* a player's platform for the scoreboard (delta.h's enum delta_platform):
+0 when its machine has not said it over Delta Peer, or this game is not on
+Delta (OpenCE's and the retail game's players show none) */
+static int scoreboard_player_platform(
+	long player_index)
+{
+	if (!delta_peer_game_on_delta())
+		return 0;
+	return delta_peer_player_platform((int)DATUM_INDEX_TO_ABSOLUTE_INDEX(player_index));
+}
+
+/* a row's platform logo, drawn by the overlay (ui_overlay.h) over the
+scoreboard's text, in its column before the name and in the row's colour:
+plain, as the HUD's text is, under the Xbox's and Gearbox's menus; with the
+drop shadow of their text under the Chupathingy menus */
+static void scoreboard_draw_platform(
+	int platform,
+	short style,
+	boolean brighten,
+	real_argb_color const *row_color,
+	long row_index,
+	short top,
+	short left)
+{
+	long font_index = hud_get_font_index();
+	struct font_header *font;
+	real line_height;
+	real size;
+	real x;
+	real y;
+	real red = row_color->red;
+	real green = row_color->green;
+	real blue = row_color->blue;
+	short x0 = (short)(render.camera.window_bounds.x0 - render.camera.viewport_bounds.x0);
+
+	if (platform <= 0 || font_index == NONE || !ui_overlay_available())
+		return;
+	font = font_definition_get(font_index);
+	/* (the scoreboard's units scaled about the title's top left, then the
+	overlay's 640 columns centred on the screen's; its 480 lines are the
+	screen's) */
+	line_height = (real)(font->leading_height + font->descending_height + font->ascending_height) * SCOREBOARD_SCALE;
+	size = line_height * 0.7f;
+	x = x0 + (left + SCOREBOARD_PLACE_WIDTH + 0.5f * SCOREBOARD_PLATFORM_WIDTH - x0) * SCOREBOARD_SCALE -
+		0.5f * (halo_screen_width() - 640);
+	y = top + row_index * line_height + 0.5f * (line_height - size);
+	if (brighten)
+	{
+		red = MIN(red + 0.4f, 1.0f);
+		green = MIN(green + 0.4f, 1.0f);
+		blue = MIN(blue + 0.4f, 1.0f);
+	}
+	ui_overlay_platform(
+		platform,
+		size,
+		x,
+		y,
+		((unsigned int)(red * 255.0f) << 24) | ((unsigned int)(green * 255.0f) << 16) |
+			((unsigned int)(blue * 255.0f) << 8) | (unsigned int)(PIN(row_color->alpha, 0.0f, 1.0f) * 255.0f),
+		style == 2);
+
+	return;
+}
+#endif
 
 /* sdl_platform.c's: the wheel's and Page Up/Down's moves of the open
 scoreboard (notches and pages, down positive) */
@@ -1958,7 +2097,11 @@ static void game_engine_rasterize_scoreboard(
 	short top;
 	wchar_t *column_name;
 	wchar_t *score_name;
+#ifdef HALO_GAME_BROWSER
+	short platforms_style = network ? scoreboard_platforms_style() : NONE;
+#endif
 
+	scoreboard_platform_width = 0;
 	if (font_index == NONE)
 		return;
 	offset_rectangle2d(&bounds, -render.camera.viewport_bounds.x0, -render.camera.viewport_bounds.y0);
@@ -1985,6 +2128,21 @@ static void game_engine_rasterize_scoreboard(
 		ranked_count = populate_statistic_buffer(ranked, _postgame_statistic_ranking, FALSE);
 		statistic_buffer_in_game_only = FALSE;
 	}
+#ifdef HALO_GAME_BROWSER
+	/* (the logos' column only when a player has one: else the layout is the
+	original's) */
+	if (platforms_style != NONE && ui_overlay_available())
+	{
+		for (index = 0; index < ranked_count; index++)
+		{
+			if (scoreboard_player_platform(ranked[index].player_index) > 0)
+			{
+				scoreboard_platform_width = SCOREBOARD_PLATFORM_WIDTH;
+				break;
+			}
+		}
+	}
+#endif
 	team_columns = has_teams && scoreboard_team_columns() && width >= 2 * SCOREBOARD_COLUMN_WIDTH + SCOREBOARD_COLUMN_GAP;
 	for (index = 0; index < ranked_count; index++)
 	{
@@ -2126,6 +2284,8 @@ static void game_engine_rasterize_scoreboard(
 		struct statistic_buffer *entry;
 		struct player_datum *player;
 		wchar_t *status_string;
+		wchar_t const *shown_name;
+		wchar_t profile_name[SCOREBOARD_PROFILE_NAME_LENGTH];
 		real_argb_color *row_color;
 
 		if (row >= rows || position >= list_counts[list])
@@ -2159,12 +2319,13 @@ static void game_engine_rasterize_scoreboard(
 			else
 				usprintf(ping_string, L"%ld", ping);
 		}
+		shown_name = scoreboard_player_name(entry->player_index, player, profile_name, SCOREBOARD_PROFILE_NAME_LENGTH);
 		usnprintf(
 			row_string,
 			NUMBEROF(row_string),
 			L"\t%s\t%s\t%s\t%s",
 			campaign ? L"" : get_place_string(entry),
-			player->name,
+			shown_name,
 			status_string,
 			ping_string);
 		row_string[NUMBEROF(row_string) - 1] = 0;
@@ -2177,6 +2338,19 @@ static void game_engine_rasterize_scoreboard(
 			top,
 			(short)(left + column * (SCOREBOARD_COLUMN_WIDTH + SCOREBOARD_COLUMN_GAP)),
 			TRUE);
+#ifdef HALO_GAME_BROWSER
+		if (scoreboard_platform_width)
+		{
+			scoreboard_draw_platform(
+				scoreboard_player_platform(entry->player_index),
+				platforms_style,
+				player_index == entry->player_index,
+				row_color,
+				2 + row,
+				top,
+				(short)(left + column * (SCOREBOARD_COLUMN_WIDTH + SCOREBOARD_COLUMN_GAP)));
+		}
+#endif
 	}
 	/* (where the scroll is, and how to move it) */
 	if (total > page)
@@ -2357,6 +2531,35 @@ static void drawline(
 	return;
 }
 
+/* port: the carnage report's prompt, kept inside the 4:3 screen. Retail's
+start where the Xbox's buttons fit; the keyboard's keys ("[Space] =pick
+game") and wider buttons ran past the screen's right edge into a wide
+screen's sides. A prompt that would end past POSTGAME_PROMPT_RIGHT starts
+that much further left (measured by drawing it unseen first); one that
+fits is where retail drew it */
+enum
+{
+	POSTGAME_PROMPT_RIGHT = 610
+};
+
+static void postgame_draw_prompt(
+	rectangle2d const *bounds,
+	wchar_t const *prompt,
+	real_argb_color const *color)
+{
+	rectangle2d drawn = *bounds;
+	real_argb_color unseen = *color;
+
+	unseen.alpha = 0.0f;
+	draw_string_set_color(&unseen);
+	draw_string_and_hack_in_icons(&drawn, NULL, NULL, 0, prompt, FALSE);
+	drawn = *bounds;
+	if (draw_string_and_hack_in_icons_end_x > POSTGAME_PROMPT_RIGHT)
+		drawn.x0 = (short)MAX(0, drawn.x0 - (draw_string_and_hack_in_icons_end_x - POSTGAME_PROMPT_RIGHT));
+	draw_string_set_color(color);
+	draw_string_and_hack_in_icons(&drawn, NULL, NULL, 0, prompt, FALSE);
+}
+
 void game_engine_post_rasterize_post_game(
 	void)
 {
@@ -2518,6 +2721,7 @@ void game_engine_post_rasterize_post_game(
 		struct player_datum *player = player_get(player_index);
 		real_argb_color team_colors[2];
 		wchar_t const *place_string;
+		wchar_t profile_name[SCOREBOARD_PROFILE_NAME_LENGTH];
 
 		if (player->local_player_index != NONE)
 			draw_string_set_color(&normal_color);
@@ -2545,7 +2749,8 @@ void game_engine_post_rasterize_post_game(
 			draw_string_set_color(
 				&team_colors[PIN(team_index, 0, 1)]);
 		}
-		usnprintf(row_string, NUMBEROF(row_string), L" \t \t%s", player->name);
+		usnprintf(row_string, NUMBEROF(row_string), L" \t \t%s",
+			scoreboard_player_name(player_index, player, profile_name, SCOREBOARD_PROFILE_NAME_LENGTH));
 		row_string[NUMBEROF(row_string) - 1] = 0;
 		drawline(row_string, draw_row, 0);
 		draw_string_set_color(&winner_color);
@@ -2624,13 +2829,7 @@ void game_engine_post_rasterize_post_game(
 					unicode_string_list_get_string(string_list_index, 0x48);
 			else
 				prompt = L"";
-			draw_string_and_hack_in_icons(
-				&bounds,
-				NULL,
-				NULL,
-				0,
-				prompt,
-				FALSE);
+			postgame_draw_prompt(&bounds, prompt, &prompt_color);
 			return;
 		}
 
@@ -2640,13 +2839,7 @@ void game_engine_post_rasterize_post_game(
 			prompt = unicode_string_list_get_string(string_list_index, 0x49);
 		else
 			prompt = L"";
-		draw_string_and_hack_in_icons(
-			&bounds,
-			NULL,
-			NULL,
-			0,
-			prompt,
-			FALSE);
+		postgame_draw_prompt(&bounds, prompt, &prompt_color);
 	}
 
 	return;
@@ -5472,6 +5665,17 @@ void game_engine_end_game(
 #ifdef HALO_GAME_BROWSER
 		if (global_network_game_server_get())
 			game_engine_report_game();
+#endif
+#ifdef HALO_XBOX_CONSOLE
+		/* (the first online game that ends: the console's signed platform
+		claim, port/xbox/src/xbox_claim_run.c) */
+		if (game_connection() == _game_connection_network_client ||
+			game_connection() == _game_connection_network_server)
+		{
+			extern void xbox_claim_game_ended(void);
+
+			xbox_claim_game_ended();
+		}
 #endif
 		game_engine_globals.postgame_state = game_engine_mode_postgame_delay;
 		game_engine_globals.postgame_timer = 7.0f;
@@ -9447,7 +9651,24 @@ void game_engine_read_network_state(
 	/* (a state the game type refused is not had: the first it takes is,
 	whose events it only takes) */
 	if (!read)
+	{
+#ifdef HALO_PORT_CONSOLE_LIMITS
+		/* port: the console's limits (halo_port_limits.h): slayer's and
+		ctf's states from a PC host are read; the others' are the PCs' 128
+		slots, which this build does not yet fold, so their scores stay this
+		machine's own (told once a game type) */
+		static long told_types = 0;
+		long type = game_engine_get_type();
+
+		if (type >= 0 && type < 32 && !(told_types & (1L << type)))
+		{
+			told_types |= 1L << type;
+			error(3, "cross-play: the host's state of game type %ld (%ld bytes) is not one this build reads",
+				type, size);
+		}
+#endif
 		return;
+	}
 	game_engine_network_state_read = TRUE;
 	/* the game ended on the host (after what ended it is shown, as the host
 	shows it) */

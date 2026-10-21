@@ -26,6 +26,7 @@ state and never sent to another machine.
 #include "units/units.h"
 #include "engine_ai/claims.h"
 #include "bot_manager.h"
+#include "bot_goal_policy_ce.h"
 #include "human_callouts.h" /* port: implicit local-human team awareness */
 #include "halo_bot_objectives.h" /* port: game-owned copied flag state */
 int config_boolean(char const *name);
@@ -54,6 +55,7 @@ static struct
 {
 	short ambition_count;
 	struct bot_ambition ambitions[BOT_AMBITIONS_MAXIMUM];
+	struct bot_ambitions objective_claims;
 	struct bot_sighting sightings[BOT_MANAGER_TEAMS][HALO_PORT_MAXIMUM_NETWORK_PLAYERS];
 	struct engine_ai_claims item_claims;
 	/* port: vehicle seats, keyed by bot_manager_seat_key */
@@ -76,6 +78,7 @@ void bot_manager_reset(
 	short player_index;
 
 	csmemset(&bot_manager_globals, 0, sizeof(bot_manager_globals));
+	bot_ambitions_reset(&bot_manager_globals.objective_claims);
 	engine_ai_claims_reset(&bot_manager_globals.item_claims);
 	engine_ai_claims_reset(&bot_manager_globals.seat_claims);
 	human_callouts_reset(); /* port: no contacts survive map/game resets */
@@ -274,18 +277,20 @@ void bot_manager_release_item(
 		(uint32_t)object_index, (uint32_t)bot_number);
 }
 
-void bot_manager_release_bot(
-	long team_index,
-	short bot_number)
+void bot_manager_release_bot(long team_index, short bot_number)
 {
-	uint32_t claim_scope;
-
-	if (bot_number <= 0 || !bot_manager_claim_scope(team_index, &claim_scope))
+	uint32_t scope;
+	(void)team_index;
+	if (bot_number <= 0)
 		return;
-	engine_ai_claims_release_owner(&bot_manager_globals.item_claims, claim_scope,
-		(uint32_t)bot_number);
-	engine_ai_claims_release_owner(&bot_manager_globals.seat_claims, claim_scope,
-		(uint32_t)bot_number);
+	bot_ambitions_release(&bot_manager_globals.objective_claims, (uint32_t)bot_number, NULL);
+	/* Bot numbers are host-global. Release old scopes too after team changes
+	   or a missing player; never free a different bot's claims. */
+	for (scope = 0; scope < BOT_MANAGER_TEAMS; scope++)
+	{
+		engine_ai_claims_release_owner(&bot_manager_globals.item_claims, scope, (uint32_t)bot_number);
+		engine_ai_claims_release_owner(&bot_manager_globals.seat_claims, scope, (uint32_t)bot_number);
+	}
 }
 
 /* A seat's claim key: the vehicle's absolute index and the seat (below
@@ -370,32 +375,73 @@ void bot_manager_release_seat(
 	engine_ai_claims_release(&bot_manager_globals.seat_claims, claim_scope, key, (uint32_t)bot_number);
 }
 
-/* port: Goals are rebuilt every tick, but identity is kind/team/salted datum,
-not their current array offset. Losing a claim leaves another bot free to act. */
-boolean bot_manager_ctf_goal(long team_index, long player_index, short bot_number,
-	long unavailable_object_index, struct bot_ambition *goal)
+/* Find one typed goal, without utility-ranking unrelated ambitions. A peek
+does not reserve slots; the behavior selector calls again with claim=TRUE. */
+boolean bot_manager_find_ambition(long team_index, long player_index, short bot_number,
+	enum bot_ambition_kind kind, long unavailable_object_index, real_point3d const *from,
+	boolean claim, struct bot_ambition *goal)
 {
+	struct bot_ambition_actor actor = {0};
+	struct bot_ambition_score scores[BOT_AMBITIONS_MAXIMUM] = {0};
+	uint32_t selected;
 	short index;
-	struct bot_ambition const *best = NULL;
-	if (!goal || team_index < 0 || team_index >= BOT_MANAGER_TEAMS ||
-		player_index == NONE || bot_number <= 0) return FALSE;
+
+	if (!goal || !from || bot_number <= 0 || bot_number > BOT_AMBITION_BOTS_MAX ||
+		player_index == NONE || team_index < 0 || team_index >= BOT_MANAGER_TEAMS ||
+		kind <= _bot_ambition_none || kind >= NUMBER_OF_BOT_AMBITION_KINDS)
+		return FALSE;
+	actor.bot_number = (uint32_t)bot_number;
+	actor.player_key = (uint32_t)player_index;
+	actor.team_index = (uint32_t)team_index;
+	actor.has_teams = game_engine_has_teams() != 0;
 	for (index = 0; index < bot_manager_globals.ambition_count; index++)
 	{
 		struct bot_ambition const *candidate = &bot_manager_globals.ambitions[index];
-		if (!bot_manager_ambition_allowed(candidate, team_index)) continue;
-		if (candidate->kind == _bot_ambition_deliver &&
-			candidate->carrier_player_index != player_index) continue;
-		if ((candidate->kind == _bot_ambition_take || candidate->kind == _bot_ambition_return) &&
-			(candidate->object_index == unavailable_object_index ||
-			bot_manager_item_claimed_by_other(team_index, candidate->object_index, bot_number))) continue;
-		if (!best || candidate->value > best->value) best = candidate;
+		real distance;
+
+		if (candidate->kind != kind || !bot_manager_ambition_allowed(candidate, team_index))
+			continue;
+		if ((kind == _bot_ambition_take || kind == _bot_ambition_return) &&
+			candidate->object_index == unavailable_object_index)
+			continue;
+		/* World-specific usable/interactable/banned-area checks belong here.
+		CTF publication currently supplies only validated public engine state. */
+		distance = distance3d(from, &candidate->position);
+		scores[index].utility = 1.f;
+		scores[index].distance = distance * distance;
 	}
-	if (!best) return FALSE;
-	if ((best->kind == _bot_ambition_take || best->kind == _bot_ambition_return) &&
-		!bot_manager_claim_item(team_index, best->object_index, bot_number, 4 * TICKS_PER_SECOND))
+	if (!bot_ambitions_find(&bot_manager_globals.objective_claims, &actor,
+		bot_ambition_type_for_kind(kind), scores, game_time_get(), claim != 0, &selected))
 		return FALSE;
-	*goal = *best;
+	*goal = bot_manager_globals.ambitions[selected];
 	return TRUE;
+}
+
+void bot_manager_release_goal(short bot_number, struct bot_ambition_identity const *expected)
+{
+	if (bot_number > 0)
+		bot_ambitions_release(&bot_manager_globals.objective_claims, (uint32_t)bot_number, expected);
+}
+
+boolean bot_manager_goal_claimed(short bot_number, struct bot_ambition const *goal)
+{
+	short index;
+	if (!goal || bot_number <= 0 || bot_number > BOT_AMBITION_BOTS_MAX)
+		return FALSE;
+	/* Unlimited ambitions have no native slot claim. Require the exact live
+	publication, not a stale copied goal. Limited records require ownership. */
+	for (index = 0; index < bot_manager_globals.ambition_count; index++)
+	{
+		struct bot_ambition const *current = &bot_manager_globals.ambitions[index];
+		if (!bot_ambition_identity_equal(&current->identity, &goal->identity))
+			continue;
+		if (current->slot_limit == BOT_AMBITION_UNLIMITED)
+			return !(current->exclude_bots & (1u << (bot_number - 1))) &&
+				(current->all_bots || (current->include_bots & (1u << (bot_number - 1))));
+		return bot_ambitions_has_claim(&bot_manager_globals.objective_claims,
+			(uint32_t)bot_number, &goal->identity, game_time_get());
+	}
+	return FALSE;
 }
 
 /* ---------- private code: the game modes' adapters */
@@ -404,7 +450,7 @@ boolean bot_manager_ctf_goal(long team_index, long player_index, short bot_numbe
 typedef char bot_ctf_goal_capacity_check[BOT_AMBITIONS_MAXIMUM >= 4 * HALO_BOT_CTF_TEAMS ? 1 : -1];
 
 static void bot_manager_ctf_add(short kind, short team, struct halo_bot_ctf_flag const *flag,
-	real_point3d const *position, real radius, real value, long carrier)
+	real_point3d const *position, real radius, long carrier)
 {
 	struct bot_ambition *goal;
 	assert(bot_manager_globals.ambition_count < BOT_AMBITIONS_MAXIMUM);
@@ -419,7 +465,17 @@ static void bot_manager_ctf_add(short kind, short team, struct halo_bot_ctf_flag
 	goal->carrier_player_index = carrier;
 	goal->position = *position;
 	goal->radius = radius;
-	goal->value = value;
+	goal->value = bot_goal_policy_ce_objective_value((enum bot_ambition_kind)kind);
+	goal->identity.kind = (uint32_t)kind;
+	goal->identity.acting_team = (uint32_t)team;
+	goal->identity.object_key = (uint32_t)goal->object_index;
+	goal->identity.carrier_key = (uint32_t)carrier;
+	goal->identity.source_id = (uint32_t)kind * BOT_MANAGER_TEAMS + (uint32_t)team;
+	goal->all_bots = TRUE;
+	goal->specific_player = kind == _bot_ambition_deliver ?
+		(uint32_t)carrier : BOT_AMBITION_ANY_PLAYER;
+	goal->slot_limit = kind == _bot_ambition_take || kind == _bot_ambition_return ?
+		1u : BOT_AMBITION_UNLIMITED;
 }
 
 /* port: Two flags, at most six transition logs per tick; no carrier positions. */
@@ -462,40 +518,70 @@ static void bot_manager_publish_ctf(void)
 		   The game's actual player-update predicate, not the bot, awards score. */
 		if (enemy->state == _halo_bot_flag_carried)
 			bot_manager_ctf_add(_bot_ambition_deliver, team, enemy, &own->stand,
-				0.55f, 1.f, enemy->carrier_player_index);
+				0.55f, enemy->carrier_player_index);
 		/* Search the enemy's public scoring stand when our flag is carried.
 		   This breaks a two-carrier stalemate without reading hidden positions;
 		   actual engagement still requires ordinary perception. */
 		if (own->state == _halo_bot_flag_carried)
 			bot_manager_ctf_add(_bot_ambition_hunt, team, own, &enemy->stand,
-				1.5f, 0.985f, own->carrier_player_index);
+				1.5f, own->carrier_player_index);
 		if (own->state == _halo_bot_flag_dropped)
 			bot_manager_ctf_add(_bot_ambition_return, team, own, &own->position,
-				0.45f, 0.99f, NONE);
+				0.45f, NONE);
 		if (enemy->state == _halo_bot_flag_home || enemy->state == _halo_bot_flag_dropped)
 			bot_manager_ctf_add(_bot_ambition_take, team, enemy, &enemy->position,
-				0.45f, 0.97f, NONE);
-		bot_manager_ctf_add(_bot_ambition_guard, team, NULL, &own->stand, 3.f, 0.65f, NONE);
+				0.45f, NONE);
+		bot_manager_ctf_add(_bot_ambition_guard, team, NULL, &own->stand, 3.f, NONE);
 	}
 }
 
 /* port: Standard CTF reads the engine's state. Other objective modes keep
 bots out until their rules and execution have adapters of their own. */
-static void bot_manager_publish_ambitions(
-	void)
+static void bot_manager_sync_ambitions(void)
+{
+	struct bot_ambition_rule rules[BOT_AMBITIONS_MAXIMUM] = {0};
+	short index;
+
+	for (index = 0; index < bot_manager_globals.ambition_count; index++)
+	{
+		struct bot_ambition const *goal = &bot_manager_globals.ambitions[index];
+
+		rules[index].type = bot_ambition_type_for_kind((enum bot_ambition_kind)goal->kind);
+		rules[index].identity = goal->identity;
+		rules[index].team_mask = (uint32_t)goal->team_mask;
+		rules[index].include_bots = goal->include_bots;
+		rules[index].exclude_bots = goal->exclude_bots;
+		rules[index].specific_player = goal->specific_player;
+		rules[index].slot_limit = goal->slot_limit;
+		rules[index].all_bots = goal->all_bots != 0;
+	}
+	if (!bot_ambitions_publish(&bot_manager_globals.objective_claims, rules,
+		(uint32_t)bot_manager_globals.ambition_count, game_time_get()))
+	{
+		bot_ambitions_reset(&bot_manager_globals.objective_claims);
+		bot_manager_globals.ambition_count = 0;
+		platform_log("bots: invalid ambition publication rejected");
+	}
+}
+
+static void bot_manager_publish_ambitions(void)
 {
 	bot_manager_globals.ambition_count = 0;
-	if (!game_engine_get_variant())
-		return;
-	switch (game_engine_get_variant()->game_engine_index)
+	if (game_engine_get_variant())
 	{
-	case game_engine_ctf:
-		if (config_boolean("bots.ctf")) bot_manager_publish_ctf();
-		break;
-	case game_engine_slayer:
-	default:
-		break;
+		switch (game_engine_get_variant()->game_engine_index)
+		{
+		case game_engine_ctf:
+			if (config_boolean("bots.ctf"))
+				bot_manager_publish_ctf();
+			break;
+		case game_engine_slayer:
+		default:
+			break;
+		}
 	}
+	/* Empty publication also invalidates old mode/deleted-object claims. */
+	bot_manager_sync_ambitions();
 }
 
 #endif /* HALO_FEATURE_BOTS */

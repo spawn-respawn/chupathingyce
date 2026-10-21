@@ -52,7 +52,7 @@ static const char *platform_name(int platform)
 {
 	static const char *const names[NUMBER_OF_DELTA_PLATFORMS] = {
 		"unknown", "pc_windows", "pc_macos", "pc_linux", "android", "steam_deck", "xbox", "xbox360", "wiiu",
-		"switch"
+		"switch", "psp", "vita", "xbox_uwp"
 	};
 
 	return platform >= 0 && platform < NUMBER_OF_DELTA_PLATFORMS ? names[platform] : "unknown";
@@ -357,7 +357,7 @@ static void relay_frame(struct delta_peer *peer, struct delta_peer_relay *relay,
 		{
 			int size = peer->env.legacy_table_signed(peer->env.context, peer->table_out, (int)sizeof(peer->table_out));
 
-			peer->table_out_serial = size > 0 && size <= DELTA_LEGACY_SIGNED_SIZE ? serial : 0;
+			peer->table_out_serial = size > 0 && size <= (int)sizeof(peer->table_out) ? serial : 0;
 			peer->table_out_size = peer->table_out_serial ? size : 0;
 			if (!peer->table_out_serial)
 				return;
