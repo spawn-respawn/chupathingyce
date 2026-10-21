@@ -24,11 +24,16 @@ class MetalOverlayTests(unittest.TestCase):
             temporary = Path(directory)
             harness = temporary / 'driver.c'
             harness.write_text(DRIVER)
+            # The overlay only needs the platform-count constant from delta.h;
+            # keep this isolated fixture from pulling in the Linux ABI wrappers.
+            (temporary / 'delta.h').write_text('#define NUMBER_OF_DELTA_PLATFORMS 64\n')
             for enabled in (True, False):
                 output = temporary / ('overlay-on' if enabled else 'overlay-off')
                 command = [compiler, '-std=gnu11', '-Wall', '-Wextra', '-Werror',
+                           '-Wno-nonportable-include-path',
                            '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
-                           *[f'-I{d}' for d in include_flags()[1::2]], f'-I{ROOT / "port/linux/src"}',
+                           f'-I{temporary}', *[f'-I{d}' for d in include_flags()[1::2]],
+                           f'-I{ROOT / "port/linux/src"}',
                            str(source('ui_overlay.c')), str(harness), '-lm', '-o', str(output)]
                 if enabled:
                     command.append('-DHALO_GAME_BROWSER=1')

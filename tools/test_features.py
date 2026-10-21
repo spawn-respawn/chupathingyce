@@ -176,6 +176,8 @@ typedef int boolean;
 #define FALSE 0
 #define DEFAULT_FULLSCREEN "false"
 #define DEFAULT_AUDIO_BUFFER_FRAMES "2048"
+#define DEFAULT_ANTI_ALIASING "\\\"msaa2x\\\""
+#define DEFAULT_SHADOW_RESOLUTION "256"
 #define CONFIG_VERSION_TEXT ""
 #define CONFIG_PLATFORM _platform_desktop
 #define HALO_FEATURE_SETTINGS_1 experiment
