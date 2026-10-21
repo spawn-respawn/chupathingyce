@@ -83,6 +83,9 @@ DEFINES = {
 }
 
 STUB_PLATFORM = """#include <stddef.h>
+typedef int boolean;
+#define TRUE 1
+#define FALSE 0
 void platform_log(const char *format, ...);
 """
 
@@ -177,7 +180,10 @@ def check(condition, message):
 def pending(case):
 	"""The count of changes the player would be asked about, and their words."""
 	_, output = case.run("pending")
-	return int(re.search(r"^pending=(\d+)$", output, re.M).group(1)), output
+	match = re.search(r"^pending=(\d+)$", output, re.M)
+	if match is None:
+		raise AssertionError(f"pending output has no count: {output}")
+	return int(match.group(1)), output
 
 
 def new_value(name, defaults):
@@ -392,7 +398,7 @@ def test_old_browser_address(program, directory, defaults, kind):
 
 
 def main():
-	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+	parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
 	parser.add_argument("--cc", default=os.environ.get("CC", "cc"))
 	arguments = parser.parse_args()
 	failures = 0
