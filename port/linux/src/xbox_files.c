@@ -1064,7 +1064,7 @@ BOOL WINAPI WriteFileEx(HANDLE handle, LPCVOID buffer, DWORD count, LPOVERLAPPED
 DWORD WINAPI SetFilePointer(HANDLE handle, LONG distance, PLONG distance_high, DWORD method)
 {
 	struct platform_file *file = file_from_handle(handle);
-	unsigned long low, high;
+	posix_ulong low, high;
 	int whence;
 
 	if (!file)
@@ -1111,7 +1111,7 @@ DWORD WINAPI GetFileSize(HANDLE handle, LPDWORD size_high)
 BOOL WINAPI SetEndOfFile(HANDLE handle)
 {
 	struct platform_file *file = file_from_handle(handle);
-	unsigned long low, high;
+	posix_ulong low, high;
 
 	if (!file)
 		return FALSE;
