@@ -130,7 +130,8 @@ static void observation(void) {
     assert(!bot_danger_observe(&request,&danger)); /* bullets aren't tagged grenades */
     objects[0].object.type=_object_type_vehicle;objects[0].object.position.x=4.f;
     objects[0].object.translational_velocity.i=-0.5f;
-    assert(bot_danger_observe(&request,&danger) && fabsf(cosf(danger.escape_yaw))<0.001f); /* sidestep */
+    assert(bot_danger_observe(&request,&danger) && isnan(danger.escape_yaw) &&
+        danger.velocity[0]==-0.5f && danger.threat_key==0); /* observation, not steering */
     objects[0].object.translational_velocity.i=0.5f;assert(!bot_danger_observe(&request,&danger));
     objects[0].object.translational_velocity.i=0.f;assert(!bot_danger_observe(&request,&danger));
     fresh();object_count=300;

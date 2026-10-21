@@ -37,7 +37,8 @@ void bot_reaction_observe(struct bot_reaction *state,
         bot_reaction_reset(state);
     }
     same = state->initialized && state->target_id == observation->target_id;
-    known = observation->known && observation->target_id >= 0;
+    // known = observation->known && observation->target_id >= 0;
+    known = observation->known && observation->target_id != -1;
     visible = known && observation->visible;
     if (known) {
         if (!same || !state->known) {

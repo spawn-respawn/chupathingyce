@@ -1,5 +1,5 @@
-/* Bounded, host-local ambition eligibility and slot ownership. Publication
- * and utility scoring are game-owned; this module never reads world state. */
+/* Recovered typed ambition lookup and explicit slot ownership.
+ * Publication/world eligibility are supplied by CE; no leases or goal policy. */
 #ifndef HALO_BOT_AMBITIONS_H
 #define HALO_BOT_AMBITIONS_H
 
@@ -41,8 +41,20 @@ struct bot_ambition_identity
     uint32_t source_id;
 };
 
+enum bot_ambition_type
+{
+    BOT_AMBITION_PICKUP = 0, BOT_AMBITION_DELIVER, BOT_AMBITION_INTERACT,
+    BOT_AMBITION_GUARD, BOT_AMBITION_POI, BOT_AMBITION_HUNT,
+    BOT_AMBITION_GUARD_RANKED, BOT_AMBITION_CONTEST, BOT_AMBITION_WEAPON,
+    BOT_AMBITION_EQUIPMENT, BOT_AMBITION_EXPLORE, BOT_AMBITION_HIDE,
+    BOT_AMBITION_OBJECTIVE_PATH, BOT_AMBITION_TYPE_COUNT
+};
+
+enum bot_ambition_type bot_ambition_type_for_kind(enum bot_ambition_kind kind);
+
 struct bot_ambition_rule
 {
+    enum bot_ambition_type type;
     struct bot_ambition_identity identity;
     uint32_t team_mask;
     uint32_t include_bots; /* bit (bot_number - 1) */
@@ -58,19 +70,20 @@ struct bot_ambition_actor
     uint32_t player_key;
     uint32_t team_index;
     bool has_teams;
+    bool ranks_guards; /* active difficulty flag; rank values are supplied */
 };
 
 struct bot_ambition_score
 {
-    float utility;
-    float distance; /* nonnegative secondary rank; 0 when irrelevant */
+    float utility; /* >0 = world-eligible; used as rank ONLY for ranked guards */
+    float distance; /* squared Euclidean distance, NOT path cost */
 };
 
 struct bot_ambition_claim
 {
+    enum bot_ambition_type type;
     struct bot_ambition_identity identity;
     struct bot_ambition_actor actor;
-    int64_t expires_tick;
     bool active;
 };
 
@@ -88,7 +101,7 @@ bool bot_ambition_identity_equal(struct bot_ambition_identity const *a,
     struct bot_ambition_identity const *b);
 
 /* Atomic validated replacement. Claims survive reordering/position changes,
- * not removal, changed identity, expiry, eligibility changes or time rewind.
+ * not removal, changed identity/type, eligibility changes or time rewind.
  * Reducing a slot limit keeps lower bot numbers deterministically. */
 bool bot_ambitions_publish(struct bot_ambitions *state,
     struct bot_ambition_rule const *rules, uint32_t count, int64_t tick);
@@ -100,15 +113,17 @@ bool bot_ambitions_can_claim(struct bot_ambitions const *state,
 /* Claim only the chosen candidate; failure preserves the prior claim. Success
  * atomically replaces it. Renewing one's own claim consumes no extra slot. */
 bool bot_ambitions_try_claim(struct bot_ambitions *state,
-    struct bot_ambition_actor const *actor, uint32_t index, int64_t tick, uint32_t lease_ticks);
+    struct bot_ambition_actor const *actor, uint32_t index, int64_t tick);
 
-/* Highest positive finite caller score among eligible candidates. Ties retain
- * the nearer candidate, then the current claim, then lower publication index. No rejected runner
- * acquires a claim. A valid request with no eligible winner releases the old
- * assignment. Invalid arguments/scores do not mutate state or *selected. */
-bool bot_ambitions_select(struct bot_ambitions *state,
-    struct bot_ambition_actor const *actor, struct bot_ambition_score const *scores,
-    int64_t tick, uint32_t lease_ticks, uint32_t *selected);
+/* FindBestAmbition: nearest eligible candidate of one type. Ranked guards
+ * prefer GuardRanked records and maximize supplied rank instead. Equal
+ * distances/ranks retain publication order. Peek is read-only and consumes no
+ * slots; claim replaces one limited assignment only after finding a winner.
+ * Unlimited records do not consume slots or overwrite a limited assignment.
+ * No winner or invalid input preserves prior ownership and *selected. */
+bool bot_ambitions_find(struct bot_ambitions *state,
+    struct bot_ambition_actor const *actor, enum bot_ambition_type type,
+    struct bot_ambition_score const *scores, int64_t tick, bool claim, uint32_t *selected);
 
 /* expected=NULL releases any claim; otherwise only that exact identity. A
  * cancelled old behavior must not release a newly selected ambition. */

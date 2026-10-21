@@ -17,6 +17,7 @@ def run(cc, sanitize=False):
             "-Wformat=2", "-Wundef", "-Wwrite-strings", "-Werror",
             "-I", str(ROOT / "source"),
             str(ROOT / "source/features/bots/bot_decision.c"),
+            str(ROOT / "source/features/bots/bot_goal_policy_ce.c"),
             str(ROOT / "source/engine_ai/utility.c"),
             str(ROOT / "tools/test_bot_decision.c"),
             "-o", str(executable),

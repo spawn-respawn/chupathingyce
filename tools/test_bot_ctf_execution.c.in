@@ -6,6 +6,9 @@
 #include "features/bots/bot_ambitions.h"
 #include "features/bots/bot_decision.h"
 #include "features/bots/bot_grenade.h"
+#include "features/bots/bot_movement.h"
+#include "features/bots/bot_profile.h"
+#include "features/bots/bot_goal_policy_ce.h"
 typedef int boolean;
 typedef float real;
 typedef struct { float x,y,z; } real_point3d;
@@ -15,6 +18,9 @@ typedef struct { float yaw,pitch; } real_euler_angles2d;
 #define NONE -1
 #define MAXIMUM_WEAPONS_PER_UNIT 2
 #define TICKS_PER_SECOND 30
+#define cosine cosf
+#define sine sinf
+#define arctangent atan2f
 #define SET_FLAG(a,b,c) ((c) ? ((a)|=1UL<<(b)) : ((a)&=~(1UL<<(b))))
 /* HEADERS */
 typedef int engine_ai_behavior_result;
@@ -24,7 +30,6 @@ enum { ENGINE_AI_BEHAVIOR_FAILURE,ENGINE_AI_BEHAVIOR_RUNNING,ENGINE_AI_BEHAVIOR_
     _bot_intent_jump,BOT_INTENT_SCHEMA,_unit_control_jump_bit,_bot_intent_crouch };
 enum bot_navigation_result { nav_dummy };
 struct engine_ai_behavior_intent_emitter { int unused; };
-struct sn_point { float x,y,z; };
 struct bot_navigation_command { boolean has_move,jump; real yaw,speed; };
 struct player_datum { long team_index; };
 struct unit_datum { struct { long parent_object_index; } object;
@@ -34,6 +39,7 @@ struct bot {
     short slot; long player_index,unit_index;
     boolean objective_valid,objective_waiting,abs_suppressed,decide_now,target_visible;
     uint32_t chosen_leaf;
+    float scores[BOT_BEHAVIOR_COUNT];
     long danger_until;
     struct bot_danger danger;
     struct bot_ambition objective;
@@ -47,12 +53,13 @@ struct bot {
     real movement_escape_yaw;
     struct { boolean has_move; real move_speed; real move_yaw; unsigned long control_flags; } pending;
 };
-static struct { int navigation_only,desired_count; } bots_globals;
+static struct { int navigation_only,desired_count; struct bot_utility_tuning const *tuning; } bots_globals;
 static long now=100;
 static int supported=1,choice_valid=1,nav_result=BOT_NAVIGATION_ARRIVED;
 static int resets,releases,moves,jumps,crouches,attacks,claim_available=1;
 static long excluded;
-static struct bot_ambition choice;
+static struct bot_ambition choice,guard_choice;
+static int two_goals,peeks,claim_attempts;
 static struct unit_datum unit;
 static struct weapon_datum weapon={1};
 static struct player_datum player={0};
@@ -62,17 +69,35 @@ static int game_engine_ctf_bot_variant_supported(void *v) { assert(v==&supported
 static struct unit_datum *bot_living_unit(long i) { return i==100 ? &unit : NULL; }
 static struct weapon_datum *weapon_try_and_get(long i) { return i==5 ? &weapon : NULL; }
 static int weapon_is_flag(long i) { assert(i==5); return weapon.flag; }
-int bot_manager_ctf_goal(long team,long p,short n,long unavailable,struct bot_ambition *goal) {
-    assert(team==0 && p==200 && n==1); excluded=unavailable; *goal=choice; return choice_valid;
+static struct bot_skill const *bot_active_profile(struct bot const *b) { assert(b);return bot_profile_get(BOT_PROFILE_SPARTAN); }
+static boolean bot_movement_heading_clear(struct bot const *b,real yaw,real c,real d) {
+    assert(b && isfinite(yaw) && c==0 && d==0.5f);return TRUE;
+}
+static boolean bot_navigation_ground(real_point3d const *p,real depth,real *z) {
+    assert(p && depth==1.5f);*z=0;return TRUE;
+}
+static struct player_datum *bot_player(struct bot *b) { assert(b); return &player; }
+static boolean bot_leaf_viable(struct bot *b,uint32_t leaf) { assert(b && leaf);return TRUE; }
+short bot_manager_ambition_count(void) { return choice_valid && supported ? 1 : 0; }
+struct bot_ambition const *bot_manager_ambition_get(short index) { assert(index==0);return &choice; }
+boolean bot_manager_find_ambition(long team,long p,short n,enum bot_ambition_kind kind,
+    long unavailable,real_point3d const *from,boolean claim,struct bot_ambition *goal) {
+    assert(team==0 && p==200 && n==1 && from);
+    if(claim) claim_attempts++; else peeks++;
+    if(two_goals && kind==_bot_ambition_guard) { *goal=guard_choice;return TRUE; }
+    excluded=unavailable; *goal=choice;
+    return choice_valid && choice.kind==kind && (!claim || claim_available);
 }
 void bot_manager_release_goal(short number,struct bot_ambition_identity const *expected) {
     assert(number==1 && expected && expected->kind>0);releases++;
+}
+boolean bot_manager_ambition_allowed(struct bot_ambition const *goal,long team) {
+    assert(goal && team==0);return TRUE;
 }
 boolean bot_manager_goal_claimed(short number,struct bot_ambition const *goal) {
     assert(number==1 && goal && goal->kind>0);return claim_available;
 }
 static void bot_navigation_reset(struct bot *b) { assert(b); resets++; }
-static void platform_log(char const *format, ...) { (void)format; }
 static enum bot_navigation_result bot_navigation_agent_move_to(void *agent,long u,struct sn_point point,
     real speed,real radius,struct bot_navigation_command *command) {
     assert(agent && u==100 && point.x==10 && speed==1 && radius>0);
@@ -86,7 +111,7 @@ static void engine_ai_behavior_intent_emit(struct engine_ai_behavior_intent_emit
 }
 static void bot_emit_look(struct engine_ai_behavior_intent_emitter *e,real_euler_angles2d *look) { assert(e && look); }
 static void bot_emit_move(struct engine_ai_behavior_intent_emitter *e,real yaw,real speed) {
-    assert(e && yaw==0.5f && speed==1); moves++;
+    assert(e && fabsf(yaw-0.5f)<0.0001f && speed==1); moves++;
 }
 static void object_get_origin(long u,real_point3d *p) { assert(u==100); memset(p,0,sizeof(*p)); }
 static real bot_horizontal_distance(real_point3d const *a,real_point3d const *b) {
@@ -103,8 +128,19 @@ static engine_ai_behavior_result bot_leaf_roam(struct bot *b,struct engine_ai_be
 static engine_ai_behavior_result bot_leaf_scavenge(struct bot *b,struct engine_ai_behavior_intent_emitter *e) { (void)b;(void)e;return ENGINE_AI_BEHAVIOR_FAILURE; }
 static engine_ai_behavior_result bot_leaf_vehicle(struct bot *b,struct engine_ai_behavior_intent_emitter *e) { (void)b;(void)e;return ENGINE_AI_BEHAVIOR_FAILURE; }
 /* FUNCTIONS */
+/* Drive the real ambition gate: publication refresh alone must never claim. */
+static void test_select_goal(struct bot *b,struct player_datum const *p) {
+    int previous=resets;
+    bot_update_objective(b,p);
+    if (supported && !bots_globals.navigation_only && choice_valid) {
+        assert(bot_behavior_ambition_gate(b,bot_decision_objective_leaf(
+            (enum bot_ambition_kind)choice.kind)));
+        if(resets!=previous) b->decide_now=TRUE;
+    }
+}
 static void choose(short kind) {
     memset(&choice,0,sizeof(choice)); choice.kind=kind; choice.owner_team_index=0;
+    choice.specific_player=BOT_AMBITION_ANY_PLAYER;
     choice.object_index=(kind==_bot_ambition_guard ? NONE : 5);
     choice.carrier_player_index=(kind==_bot_ambition_deliver ? 200 : NONE);
     choice.position.x=10; choice.radius=0.5f;
@@ -126,9 +162,9 @@ int main(void) {
     weapon.flag=0; assert(!bot_carries_flag(&unit)); weapon.flag=1;
     unit.unit.weapon_object_indices[1]=NONE;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_FAILURE);
-    choose(_bot_ambition_take); bot_update_objective(&bot,&player);
+    choose(_bot_ambition_take); test_select_goal(&bot,&player);
     assert(bot.objective_valid && bot.decide_now && resets==1);
-    bot.decide_now=FALSE; bot_update_objective(&bot,&player);
+    bot.decide_now=FALSE; test_select_goal(&bot,&player);
     assert(!bot.decide_now && resets==1 && excluded==NONE);
     nav_result=BOT_NAVIGATION_MOVING;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && moves==1);
@@ -138,39 +174,39 @@ int main(void) {
     assert(bot.objective_valid && bot.objective_waiting); /* proximity is not a pickup */
     bot.movement_escape_until=now+30; bot_keep_moving(&bot);
     assert(!bot.pending.has_move && bot.movement_escape_until==now);
-    choose(_bot_ambition_deliver); bot_update_objective(&bot,&player);
+    choose(_bot_ambition_deliver); test_select_goal(&bot,&player);
     assert(releases==1 && bot.objective.carrier_player_index==200);
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && bot.abs_suppressed);
     assert(bot.objective_waiting); /* own flag away: wait for the engine to score */
-    choose(_bot_ambition_guard); bot_update_objective(&bot,&player);
+    choose(_bot_ambition_guard); test_select_goal(&bot,&player);
     assert(releases==2 && bot.objective.kind==_bot_ambition_guard);
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && !bot.abs_suppressed);
-    choose(_bot_ambition_return); bot_update_objective(&bot,&player);
+    choose(_bot_ambition_return); test_select_goal(&bot,&player);
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING);
-    choose(_bot_ambition_guard); bot_update_objective(&bot,&player);
+    choose(_bot_ambition_guard); test_select_goal(&bot,&player);
     assert(releases==4); /* return succeeds through engine reset, not inventory acquisition */
-    choose(_bot_ambition_take); bot_update_objective(&bot,&player); nav_result=BOT_NAVIGATION_FAILED;
+    choose(_bot_ambition_take); test_select_goal(&bot,&player); nav_result=BOT_NAVIGATION_FAILED;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING);
     assert(releases==6 && bot.objective_retry_time==now+450 && bot.objective_unreachable_index==5);
-    choose(_bot_ambition_guard); bot_update_objective(&bot,&player); assert(excluded==5);
+    choose(_bot_ambition_guard); test_select_goal(&bot,&player); assert(excluded==5);
     nav_result=BOT_NAVIGATION_MOVING;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && !bot.objective_waiting);
     /* A new carrier duty cannot inherit a failed pickup's 15-second standstill. */
-    choose(_bot_ambition_deliver); bot_update_objective(&bot,&player);
+    choose(_bot_ambition_deliver); test_select_goal(&bot,&player);
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && !bot.objective_waiting);
-    now+=451; bot_update_objective(&bot,&player); assert(excluded==NONE);
-    choose(_bot_ambition_take); bot_update_objective(&bot,&player); nav_result=BOT_NAVIGATION_MOVING;
+    now+=451; test_select_goal(&bot,&player); assert(bot.objective_valid); /* retained claim needs no lookup */
+    choose(_bot_ambition_take); test_select_goal(&bot,&player); nav_result=BOT_NAVIGATION_MOVING;
     now=bot.objective_deadline;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && releases>=4);
-    choose(_bot_ambition_deliver); bot_update_objective(&bot,&player); nav_result=BOT_NAVIGATION_FAILED;
+    choose(_bot_ambition_deliver); test_select_goal(&bot,&player); nav_result=BOT_NAVIGATION_FAILED;
     now+=451; assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING);
     assert(bot.objective_waiting && bot.objective_retry_time==now+30); nav_result=BOT_NAVIGATION_MOVING;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && bot.objective_waiting);
     now+=31; assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && !bot.objective_waiting);
-    choice_valid=0; bot_update_objective(&bot,&player); assert(!bot.objective_valid);
-    choice_valid=1; supported=0; bot_update_objective(&bot,&player); assert(!bot.objective_valid);
-    supported=1; bots_globals.navigation_only=1; bot_update_objective(&bot,&player); assert(!bot.objective_valid);
-    bots_globals.navigation_only=0;choose(_bot_ambition_take);bot_update_objective(&bot,&player);
+    choice_valid=0; test_select_goal(&bot,&player); assert(!bot.objective_valid);
+    choice_valid=1; supported=0; test_select_goal(&bot,&player); assert(!bot.objective_valid);
+    supported=1; bots_globals.navigation_only=1; test_select_goal(&bot,&player); assert(!bot.objective_valid);
+    bots_globals.navigation_only=0;choose(_bot_ambition_take);test_select_goal(&bot,&player);
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_RUNNING && bot.running_objective_claim);
     {
         int prior=releases;
@@ -188,7 +224,7 @@ int main(void) {
         inputs.objective_valid=true;inputs.objective_value=1.f;
         nav_result=BOT_NAVIGATION_ARRIVED;bot.target_visible=TRUE;
         for(kind=_bot_ambition_take;kind<NUMBER_OF_BOT_AMBITION_KINDS;kind++) {
-            choose(kind);bot_update_objective(&bot,&player);
+            choose(kind);test_select_goal(&bot,&player);
             inputs.objective_kind=(enum bot_ambition_kind)kind;
             bot_decision_score(bot_decision_default_tuning(),&inputs,scores);
             engine_ai_utility_selector_init(&selector,0);
@@ -211,5 +247,28 @@ int main(void) {
     }
     claim_available=0;
     assert(bot_leaf_objective(&bot,&emitter)==ENGINE_AI_BEHAVIOR_FAILURE);
-    puts("CTF execution, intentional waits and bounded retries passed"); return 0;
+    /* Real scoring adapter peeks every kind without claiming before ranking.
+       A full pickup slot rejects the highest utility, then guard can win. */
+    {
+        struct bot_decision_inputs input={0};
+        engine_ai_utility_selector selector;
+        engine_ai_utility_selector_config config={BOT_BEHAVIOR_COUNT,8,0,0,0};
+        uint32_t selected=ENGINE_AI_UTILITY_NONE;
+        real_point3d origin={0};
+        memset(&bot,0,sizeof(bot));bot.slot=0;bot.unit_index=100;bot.player_index=200;
+        bot.objective_unreachable_index=NONE;
+        bots_globals.tuning=bot_decision_default_tuning();input.target_known=true;
+        choose(_bot_ambition_guard);guard_choice=choice;guard_choice.value=0.65f;
+        choose(_bot_ambition_take);choice.value=0.97f;two_goals=TRUE;peeks=claim_attempts=0;
+        bot_decision_score(bots_globals.tuning,&input,bot.scores);
+        bot_score_objectives(&bot,&player,&origin,&input);
+        assert(peeks>1 && claim_attempts==0);
+        assert(bot.scores[_bot_leaf_take-1]==0.97f && bot.scores[_bot_leaf_guard-1]==0.65f);
+        engine_ai_utility_selector_init(&selector,0);
+        assert(bot_decision_select(&selector,&config,bot.scores,(uint64_t)now,true,
+            bot_behavior_ambition_gate,&bot,&selected)==ENGINE_AI_UTILITY_CHANGED);
+        assert(selected==_bot_leaf_guard-1 && bot.objective.kind==_bot_ambition_guard);
+        assert(claim_attempts==2); /* rejected take did not prevent the eligible runner-up */
+    }
+    puts("CTF execution, read-only scoring, ambition-gated fallback and retries passed"); return 0;
 }

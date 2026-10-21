@@ -36,7 +36,7 @@ claims; item/seat claims retain their separate team scopes.
 | Tuning knobs (26–28) | Fixed and functional values, caps, weighted inputs | `engine_ai_utility_curve` (fixed, linear, power, logistic responses), `engine_ai_utility_weighted`, and caps: `struct bot_utility_tuning` in `bot_decision.h`, one table, so a game mode can have its own |
 | Confidence (27) | Bot health, target health, weapons, edge cases, in Lua | `bot_confidence()`: shields and health against the target's, weapon against weapon, enemies seen against teammates near |
 | Reaction-time budget (31–32) | 200–250 ms per decision, 8 bots, 31.25 ms each | A decision every 8 ticks (267 ms at 30 ticks a second), staggered by slot so that 31 bots spread their scoring evenly. The behavior still runs every tick; only the choice waits. A behavior that can no longer run is replaced at once |
-| Hysteresis (34–35) | Inflate the new behavior's utility for a while | The active difficulty profile owns the selector's fading bonus, duration and switching margin; CE defaults retain the one-second fade |
+| Hysteresis (34–35) | Inflate the new behavior's utility for a while | The active difficulty profile owns the fading bonus and duration; the extra CE switching margin is no longer applied |
 | Always Be Shooting (36–37) | Combat is not a behavior the bot must choose | Aim and movement are independent; a distant sighting selects behavior and closes distance, but the skill's fire range gates shots. `engine_ai/aim.{h,c}` scales a nonzero error cone by range, time tracking and movement |
 | Difficulty and aim | Skill tuning makes harder bots better, not perfect | `bot_skills[]` in `bot_profile.c`: recruits turn poorly while moving and drift clumsily; higher skills strafe better, and Spartans crouch-strafe. Sight and fire ranges are separate. Aim settles but retains an error floor |
 | Weapon/powerup awareness | A player remembers visible map pickups | `bot_item_known()` requires sight/FOV or arm's reach and keeps up to eight last-seen locations for 30 seconds. A bounded LOS budget avoids omniscient map scans |
@@ -83,15 +83,43 @@ team's sightings), then:
 A behavior's score is 0 when it cannot run (fight with no target, vehicle on
 foot), so the selector never picks it.
 
+### Movement requests and objective arrival
+
+Goal selection, route search, route installation and per-tick controls remain
+separate. The recovered Infinite `ApplyMovementRequest.cpp` and `Navigation.md`
+informed this separation; they are reading pseudocode, not CE implementations
+or evidence of an identical solver or update rate.
+
+`bot_navigation.c` installs only a usable completed route, resets its waypoint
+and jump state, and considers up to six nearby segments for rejoining after
+search latency. Rejoining stays inside the current convex floor polygon and
+requires a capsule clearance check. The normal bot follower now compares 3D
+squared distance directly with the active profile's already-squared threshold
+and advances one point per update. The old passed-waypoint shortcut is removed.
+Installation lookahead bounds and numerical profile defaults remain CE policy.
+
+Completing an old route is not tactical arrival. Only proximity to the current
+goal, on the correct floor and within the caller's radius, reports arrival;
+otherwise the bot submits another route. This includes targets that moved less
+than the 12 m early-replan threshold. Small objective radii retain precise final
+approach rather than stopping at the intermediate-waypoint tolerance. Objective
+leaves still wait for game-owned pickup, return or capture state, not route
+completion. The request's 0.1-second timer is separate from the CE decision
+cadence. Goal curves and the BSP solver are explicitly temporary suppliers;
+behavior-first ambition gating and persistent objective claims now follow the
+recovered control flow. See the current migration section for remaining gaps.
+
 ### Scores
 
-Values are 0 to 1. The default table in `bot_decision.c` (`bot_utility_tuning`) holds them:
+Goal defaults live in temporary `bot_goal_policy_ce.c`. Native utilities may
+exceed one; `bot_decision.c` does not clamp them. Goal candidates are scored
+without claims; the selector tries ambition gates in descending utility order.
 
 | Behavior | Score |
 | --- | --- |
 | `vehicle` | Fixed, while seated (a seated bot drives, guns or rides; leaving is the leaf's choice) |
-| `retreat` | `(1 − confidence) × shields-down response`, for skills that retreat, out of cooldown; capped |
-| `fight` | By how the target is known: seen, hurt by it, remembered, or a teammate's sighting; times a distance response; raised by confidence. A teammate's sighting is capped low |
+| `retreat` | Legacy CE root leaf excluded (-2); recovered disengage is a 0.7 combat child |
+| `fight` | Native 0.5 with a known target, 2 in playfighting, -2 when disabled; actual firing retains reaction/visibility/safety gates |
 | `scavenge` | The opportunity's value (an empty slot, weapon upgrade, powerup or seat), times a distance response; a fixed high score within 2.5 m, regardless of current enemy visibility (ABS continues fighting) |
 | `avoid` | 0.9 for an expiring observed grenade/approaching vehicle; disabled while seated or navigation-only |
 | `roam` | A lane-patrol floor: after contact or scavenging stops mattering, the bot routes to its assigned map-relative lane and alternates near/far patrol depths; two bots share a lane as a squad |
@@ -135,8 +163,9 @@ an intent is emitted. Submitted controls only get a short retry gate; refused
 throws cannot shorten a real cooldown. A native disengage choice can back a
 fighting bot out while ABS keeps shooting, but does not override an objective's
 movement. Observed grenades and approaching vehicles supply a bounded avoid leaf
-using ordinary movement and final collision steering. Avoid scores 0.9; only while
-danger is observed, parent fight is capped at 0.5. Higher-valued objectives retain
+using validated cached/lateral/opposite/backward candidates. Final collision
+steering can stop, but cannot substitute an unvalidated escape heading.
+Avoid scores 0.9; native fight is 0.5 independently of hazard observations. Higher-valued objectives retain
 their route priority. No hidden projectile position becomes an enemy sighting.
 See the migration document for physics limits and validation scope.
 

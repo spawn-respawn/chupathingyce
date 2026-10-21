@@ -1,5 +1,50 @@
 # Infinite-style bots in C
 
+## Current recovered-core replacement
+
+This section supersedes the historical increments below where they describe
+utility-ranked ambitions, leased objective claims or the legacy CE root scores.
+
+- `bot_decision.c` now reads the recovered 14-slot goal-output interface,
+  evaluates native fight (0.5 / playfighting 2 / excluded -2) and avoid (0.9),
+  and ranks behaviors before invoking ambition gates. The old shield-weighted
+  root retreat is excluded; native disengage remains in `bot_combat.c`.
+  Choice timestamps change only on switches; the old CE switching margin is
+  no longer applied. The damaged native fallback loop and hysteresis indexing
+  are not reproduced as unsafe/last-wins behavior.
+- `bot_ambitions.c` performs typed nearest-object lookup, or supplied ranked-guard
+  ranking. Peek is read-only; limited claims persist until explicit release,
+  replacement, publication invalidation or host lifecycle reset. Unlimited
+  records consume no slots. The CE CTF adapter publishes ordinary guards;
+  ranked guard scoring/profile data still need a supplier.
+- `bot_movement.c` implements the bot-specific squared-distance predicate,
+  normalized planar controls and bounded cached/lateral/opposite/backward
+  escape candidates. Normal route progression advances one point per update;
+  the previous passed-corner shortcut is removed. CE probes check the live
+  capsule and downward support. Observed threat identity scopes the cache;
+  movement never refreshes an occluded object's position.
+- **Temporary solver:** `bot_route_solver_ce.{h,c}` owns the existing BSP
+  search, projection, smoothing and bounded scheduler. Route submission is
+  separate from usable-result installation; the request timer is separate
+  from decision and movement cadence.
+- **Temporary goal policy:** `bot_goal_policy_ce.{h,c}` owns goal curves,
+  fallback priorities and CTF utility values. Infinite's Lua remains missing.
+
+This is a recovered-core port, not complete Infinite parity. Profile numbers,
+CE lane patrol/CTF publication, sensor budgets, item/seat leases, vehicle
+controls, collision safety and stuck recovery remain CE adapters. Exact
+special-link/downward predicates, object-kind-specific avoidance branches,
+objective markup data and the upstream solver remain unresolved. No live
+match or Infinite runtime parity test was performed.
+
+Verification: sanitizer-backed decision, ambition, movement/request, CTF,
+grenade/danger, combat, profile/reaction and steering/fire-safety fixtures;
+native macOS LP64 syntax compilation of changed bot modules. Full build
+acceptance is blocked by existing missing Metal manifest entries for unrelated
+`port/linux/src` files. Historical full-build results below do not validate
+this replacement.
+
+
 ## Deferred tuning — deliberately missing for now
 
 **Infinite's Lua goal-scoring policy and numerical difficulty/weapon tag tuning

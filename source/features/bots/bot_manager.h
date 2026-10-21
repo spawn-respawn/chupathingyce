@@ -65,18 +65,12 @@ void bot_manager_update(
 short bot_manager_ambition_count(
 	void);
 
-/* port: standard CTF goal selection. One claimant per team pursues each loose
-flag; other bots guard. Carriers always deliver, regardless of shared contacts. */
-boolean bot_manager_ctf_goal(long team_index, long player_index, short bot_number,
-	long unavailable_object_index, struct bot_ambition *goal);
-
-/* Select the highest-valued eligible ambition of the requested kind(s),
-   nearest first for equal values when from is supplied. kind_mask uses bit
-   (kind), not publication index. Claims replace atomically; no runner-up
-   is claimed while scoring. Loose-object backoff excludes only take/return. */
-boolean bot_manager_choose_ambition(long team_index, long player_index, short bot_number,
-	uint32_t kind_mask, long unavailable_object_index, real_point3d const *from,
-	struct bot_ambition *goal);
+/* Recovered nearest-object lookup within ONE behavior's ambition kind.
+ * Peek never consumes slots. The selector claims only when trying that behavior.
+ * from is required; distance is Euclidean, not a navmesh route cost. */
+boolean bot_manager_find_ambition(long team_index, long player_index, short bot_number,
+	enum bot_ambition_kind kind, long unavailable_object_index, real_point3d const *from,
+	boolean claim, struct bot_ambition *goal);
 
 void bot_manager_release_goal(short bot_number, struct bot_ambition_identity const *expected);
 boolean bot_manager_goal_claimed(short bot_number, struct bot_ambition const *goal);

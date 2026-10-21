@@ -246,22 +246,6 @@ static boolean bot_danger_candidate(struct object_datum const *object, long key,
     return parent && parent->unit.grenade_object_index != key;
 }
 
-static real bot_danger_escape_yaw(struct bot_danger_request const *request,
-    real_point3d const *point, real_vector3d const *velocity)
-{
-    real x = request->origin[0] - point->x;
-    real y = request->origin[1] - point->y;
-    real speed = velocity->i * velocity->i + velocity->j * velocity->j;
-    if (speed > 0.0025f)
-    {
-        real side = x * -velocity->j + y * velocity->i >= 0.f ? 1.f : -1.f;
-        return atan2f(side * velocity->i, -side * velocity->j);
-    }
-    if (x == 0.f && y == 0.f)
-        return atan2f(-sinf(request->yaw), -cosf(request->yaw));
-    return atan2f(y, x);
-}
-
 bool bot_danger_observe(struct bot_danger_request const *request, struct bot_danger *danger)
 {
     struct object_iterator iterator;
@@ -312,7 +296,9 @@ bool bot_danger_observe(struct bot_danger_request const *request, struct bot_dan
         if (!bot_danger_visible(request, &point, iterator.index))
             continue;
         danger->position[0] = point.x; danger->position[1] = point.y; danger->position[2] = point.z;
-        danger->escape_yaw = bot_danger_escape_yaw(request, &point, &velocity);
+        danger->threat_key = (int32_t)iterator.index;
+        danger->velocity[0] = velocity.i; danger->velocity[1] = velocity.j; danger->velocity[2] = velocity.k;
+        danger->escape_yaw = NAN; /* perception does not choose movement */
         best = squared;
         found = TRUE;
     }

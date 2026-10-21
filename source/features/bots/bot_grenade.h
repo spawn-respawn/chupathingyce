@@ -25,8 +25,10 @@ struct bot_danger_request
 };
 struct bot_danger
 {
+    int32_t threat_key; /* full salted identity of the observed threat */
     float position[3];
-    float escape_yaw;
+    float velocity[3]; /* observed snapshot, never refreshed while occluded */
+    float escape_yaw; /* validated escape cache; NaN until selected */
 };
 /* At most 256 candidates and four LOS tests. Only visible (or arm's-reach
  * LOS) grenades/approaching vehicles can produce a danger observation. */

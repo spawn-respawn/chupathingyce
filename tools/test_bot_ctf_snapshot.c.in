@@ -5,6 +5,7 @@
 #include <string.h>
 #include "engine_ai/claims.h"
 #include "features/bots/bot_ambitions.h"
+#include "features/bots/bot_goal_policy_ce.h"
 typedef int boolean;
 typedef unsigned char byte;
 typedef float real;
@@ -99,6 +100,34 @@ static void game_engine_flag_reset(long w,real_point3d const *position) {
     weapon->object.position=*position;
 }
 /* FUNCTIONS */
+/* Fixture-only CE priorities. Production scores behaviors first, then calls
+ * the typed manager lookup through its recovered ambition gate. */
+static boolean test_ctf_goal(long team,long player,short number,long excluded,struct bot_ambition *goal) {
+    real_point3d origin={0};
+    struct bot_ambition candidate;
+    uint32_t tried=0;
+    int pass,kind,best;
+    real value;
+    if(!goal) return FALSE;
+    for(pass=0;pass<NUMBER_OF_BOT_AMBITION_KINDS;pass++) {
+        best=0;value=-1;
+        for(kind=1;kind<NUMBER_OF_BOT_AMBITION_KINDS;kind++) {
+            if(!(tried&(1u<<kind)) && bot_manager_find_ambition(team,player,number,
+                (enum bot_ambition_kind)kind,excluded,&origin,FALSE,&candidate) && candidate.value>value) {
+                value=candidate.value;best=kind;
+            }
+        }
+        if(!best) return FALSE;
+        if(bot_manager_find_ambition(team,player,number,(enum bot_ambition_kind)best,
+            excluded,&origin,TRUE,goal)) {
+            if(goal->slot_limit==BOT_AMBITION_UNLIMITED) bot_manager_release_goal(number,NULL);
+            return TRUE;
+        }
+        tried|=1u<<best;
+    }
+    return FALSE;
+}
+#define bot_manager_ctf_goal test_ctf_goal
 static void reset(void) {
     int i;
     memset(&variant,0,sizeof(variant)); variant.game_engine_index=game_engine_ctf;
@@ -189,7 +218,8 @@ int main(void) {
     assert(!bot_manager_ctf_goal(0,200,1,NONE,NULL));
     bot_manager_release_bot(0,1);
     assert(bot_manager_ctf_goal(0,202,2,NONE,&goal) && goal.kind==_bot_ambition_take);
-    now=121; assert(bot_manager_ctf_goal(0,200,1,NONE,&goal) && goal.kind==_bot_ambition_take);
+    now=121; assert(bot_manager_ctf_goal(0,200,1,NONE,&goal) && goal.kind==_bot_ambition_guard);
+    bot_manager_release_bot(0,2); /* claims persist until explicit release */
     weapons[0].weapon.flags=1UL<<_ctf_weapon_handled_bit;
     bot_manager_publish_ambitions();
     assert(bot_manager_ctf_goal(0,200,1,NONE,&goal) && goal.kind==_bot_ambition_return && goal.object_index==10);

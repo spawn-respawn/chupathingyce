@@ -13,22 +13,22 @@ struct bot_skill const bot_skills[BOT_PROFILE_COUNT] =
         false, false, false, false, 16.f, 8.f, 1.2f, 3.f, 0.45f, false, 1.8f,
         {0.9f, 1.17f}, {0.9f, 1.17f}, 0.5f, 4.f, 0.15f, 1.f, 0.05f,
         { {1.f, 1.2f}, {8.f, 16.f}, 0.75f, 3.f, 1.5f, 3.f, 3.f,
-            0.2f, 0.3f, 0.3f, 0.f, 8.f, 20.f, 5.f, false, false } },
+            0.2f, 0.3f, 0.3f, 0.f, 8.f, 20.f, 5.f, false, false }, 0.2025f, 6.f },
     { "marine", 4.f, 320.f, 40.f, 65.f, 8.f, 1.f, 0.5f,
         true, true, false, false, 24.f, 12.f, 0.8f, 1.8f, 0.7f, false, 1.4f,
         {0.5f, 0.65f}, {0.5f, 0.65f}, 0.75f, 4.f, 0.15f, 1.f, 0.05f,
         { {1.f, 1.2f}, {8.f, 16.f}, 0.75f, 3.f, 1.5f, 3.f, 3.f,
-            0.2f, 0.3f, 0.3f, 0.f, 8.f, 20.f, 5.f, false, false } },
+            0.2f, 0.3f, 0.3f, 0.f, 8.f, 20.f, 5.f, false, false }, 0.2025f, 6.f },
     { "odst", 2.5f, 450.f, 50.f, 75.f, 6.f, 1.5f, 0.3f,
         true, true, true, false, 32.f, 16.f, 0.55f, 1.35f, 0.85f, false, 1.1f,
         {0.3f, 0.39f}, {0.3f, 0.39f}, 1.f, 4.f, 0.15f, 1.f, 0.05f,
         { {1.f, 1.2f}, {8.f, 16.f}, 0.75f, 3.f, 1.5f, 3.f, 3.f,
-            0.2f, 0.3f, 0.3f, 0.35f, 8.f, 20.f, 5.f, true, false } },
+            0.2f, 0.3f, 0.3f, 0.35f, 8.f, 20.f, 5.f, true, false }, 0.2025f, 6.f },
     { "spartan", 1.5f, 720.f, 60.f, 85.f, 5.f, 1.2f, 0.45f,
         true, true, true, true, 40.f, 22.f, 0.35f, 1.15f, 1.f, true, 0.8f,
         {0.18f, 0.234f}, {0.18f, 0.234f}, 1.25f, 4.f, 0.15f, 1.f, 0.05f,
         { {1.f, 1.2f}, {8.f, 16.f}, 0.75f, 3.f, 1.5f, 3.f, 3.f,
-            0.2f, 0.3f, 0.3f, 0.45f, 8.f, 20.f, 5.f, true, false } }
+            0.2f, 0.3f, 0.3f, 0.45f, 8.f, 20.f, 5.f, true, false }, 0.2025f, 6.f }
 };
 
 /* Missing Infinite rows are intentionally absent, not guessed by weapon name. */

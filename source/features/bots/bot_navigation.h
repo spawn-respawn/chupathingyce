@@ -46,8 +46,10 @@ struct bot_navigation_agent
 	struct sn_point goal;
 	struct sn_point progress_position;
 	uint32_t waypoint;
+	real reach_distance_squared; /* active profile, already squared */
 	long progress_tick;
 	long search_tick; /* when the current search began, for its log line */
+	long next_request_tick; /* request timer, separate from follower/decision cadence */
 	long waypoint_deadline; /* the current waypoint must be reached by then */
 	uint32_t deadline_waypoint;
 	long occupant_wait_ticks; /* at this waypoint, waiting for the live check */
@@ -110,9 +112,12 @@ void bot_navigation_agent_reset_path(
 
 /* Route to a tactical goal using the map's BSP walkable surfaces and live biped
  * capsule checks. ARRIVED means within arrival_distance horizontally and
- * 0.35 m of the goal's floor height; WAITING while the
- * search is queued or under way. A queued search follows a moving target; one
- * under way, or a route, replans when the target is 12 metres from its goal. */
+ * 0.35 m of the current goal's floor height, not just completion of an older
+ * route; WAITING while the search is queued or under way. A queued search
+ * follows a moving target; one under way, or a route, replans when the target
+ * is 12 metres from its goal, or when its old endpoint is reached without
+ * reaching the current goal. Completed routes rejoin nearby segments only
+ * within the current convex floor polygon and after a capsule check. */
 enum bot_navigation_result bot_navigation_agent_move_to(
 	struct bot_navigation_agent *agent,
 	long unit_index,

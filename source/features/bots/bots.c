@@ -86,7 +86,9 @@ Configuration (port/linux/src/port_config.c): bots.count (0..31), bots.skill.
 #include "items/equipment_definitions.h"
 #include "extensions/extension_api.h"
 #include "bot_manager.h"
-#include "bot_decision.h" /* observed inputs -> CE utility policy -> outputs */
+#include "bot_decision.h"
+#include "bot_goal_policy_ce.h"
+#include "bot_movement.h" /* observed inputs -> CE utility policy -> outputs */
 #include "bot_profile.h"
 #include "bot_reaction.h"
 #include "bot_combat.h"
@@ -539,6 +541,8 @@ static boolean bot_carries_flag(struct unit_datum const *unit);
 static real bot_weapon_utility(long weapon_index);
 static real bot_unit_weapon_utility(struct unit_datum const *unit);
 static real bot_unit_vitality(struct unit_datum const *unit);
+static boolean bot_movement_heading_clear(struct bot const *bot, real yaw,
+	real clearance, real probe_distance);
 
 /* Base actions/aim and active perception/selection can be overridden separately. */
 static struct bot_skill const *bot_base_profile(struct bot const *bot)
@@ -2893,26 +2897,32 @@ static void bot_objective_cancel(struct bot *bot)
 
 static void bot_update_objective(struct bot *bot, struct player_datum const *player)
 {
-	struct bot_ambition goal;
-	boolean valid;
-	long now = game_time_get();
-	long excluded = now < bot->objective_retry_time ? bot->objective_unreachable_index : NONE;
-	valid = !bots_globals.navigation_only &&
-		game_engine_ctf_bot_variant_supported(game_engine_get_variant()) &&
-		bot_manager_ctf_goal(player->team_index, bot->player_index,
-			(short)(bot->slot + 1), excluded, &goal);
-	if (valid != bot->objective_valid || (valid &&
-		!bot_ambition_identity_equal(&goal.identity, &bot->objective.identity)))
+	short index;
+	if (!bot->objective_valid)
+		return;
+	/* Publication refresh is NOT goal selection or a lease renewal. Preserve
+	the selected identity until explicit cancellation or engine removal. */
+	if (!bots_globals.navigation_only &&
+		game_engine_ctf_bot_variant_supported(game_engine_get_variant()))
 	{
-		bot_objective_release(bot);
-		bot_navigation_reset(bot);
-		bot->decide_now = TRUE;
-		bot->objective_deadline = now + 60 * TICKS_PER_SECOND;
-		if (valid)
-			platform_log("bots: bot %d CTF goal %d object %ld", bot->slot + 1, goal.kind, goal.object_index);
+		for (index = 0; index < bot_manager_ambition_count(); index++)
+		{
+			struct bot_ambition const *goal = bot_manager_ambition_get(index);
+			if (goal && bot_ambition_identity_equal(&goal->identity, &bot->objective.identity) &&
+				bot_manager_ambition_allowed(goal, player->team_index) &&
+				(goal->specific_player == BOT_AMBITION_ANY_PLAYER ||
+					goal->specific_player == (uint32_t)bot->player_index) &&
+				bot_manager_goal_claimed((short)(bot->slot + 1), goal))
+			{
+				bot->objective = *goal;
+				return;
+			}
+		}
 	}
-	bot->objective_valid = valid;
-	if (valid) bot->objective = goal;
+	bot_objective_release(bot);
+	bot->objective_valid = FALSE;
+	bot_navigation_reset(bot);
+	bot->decide_now = TRUE;
 }
 
 static engine_ai_behavior_result bot_leaf_objective(struct bot *bot,
@@ -3535,7 +3545,7 @@ static engine_ai_behavior_result bot_leaf_roam(
 static void bot_update_danger(struct bot *bot)
 {
     struct bot_danger_request request;
-    struct bot_danger observed;
+    struct bot_danger observed = {0};
     struct unit_datum *unit = bot_living_unit(bot->unit_index);
     real_point3d origin, eye;
     long now = game_time_get();
@@ -3565,19 +3575,59 @@ static void bot_update_danger(struct bot *bot)
     {
         if (now >= bot->danger_until)
             bot->decide_now = TRUE;
+        /* Keep only this threat's previously validated escape direction.
+           A new salted identity or expired observation cannot inherit it. */
+        observed.escape_yaw = now < bot->danger_until &&
+            observed.threat_key == bot->danger.threat_key ? bot->danger.escape_yaw : NAN;
         bot->danger = observed;
         bot->danger_until = now + TICKS_PER_SECOND / 2;
         bot->aware_time = MIN(bot->aware_time, now);
     }
 }
 
+/* CE implementation of the recovered forward + downward candidate probes.
+ * Use the live capsule, plus support below a point raised by 0.2. Object-kind
+ * selection of the alternate 1.25m probe is unrecovered; on-foot CE uses 0.5m. */
+static bool bot_avoid_direction_clear(void *context, struct sn_point direction)
+{
+    struct bot *bot = (struct bot *)context;
+    real_point3d point;
+    real ground;
+    real yaw = arctangent(direction.y, direction.x);
+    if (!bot_movement_heading_clear(bot, yaw, 0.f, 0.5f))
+        return false;
+    object_get_origin(bot->unit_index, &point);
+    point.x += direction.x * 0.5f;
+    point.y += direction.y * 0.5f;
+    point.z += 0.2f;
+    return bot_navigation_ground(&point, 1.5f, &ground) != 0;
+}
+
 static engine_ai_behavior_result bot_leaf_avoid(struct bot *bot,
     struct engine_ai_behavior_intent_emitter *emitter)
 {
     struct unit_datum *unit = bot_living_unit(bot->unit_index);
+    real_point3d origin;
+    struct sn_point toward;
+    struct sn_point cached;
+    struct sn_point escape;
+    real lead = bot_active_profile(bot)->avoid_lead_ticks;
     if (!unit || unit->object.parent_object_index != NONE || game_time_get() >= bot->danger_until)
         return ENGINE_AI_BEHAVIOR_FAILURE;
-    bot_emit_move(emitter, bot->danger.escape_yaw, 1.f);
+    object_get_origin(bot->unit_index, &origin);
+    toward.x = bot->danger.position[0] + bot->danger.velocity[0] * lead - origin.x;
+    toward.y = bot->danger.position[1] + bot->danger.velocity[1] * lead - origin.y;
+    toward.z = 0.f;
+    cached.x = cosine(bot->danger.escape_yaw);
+    cached.y = sine(bot->danger.escape_yaw);
+    cached.z = 0.f;
+    if (bot_movement_escape(toward, cached, bot_avoid_direction_clear, bot, &escape))
+    {
+        bot->danger.escape_yaw = arctangent(escape.y, escape.x);
+        bot_emit_move(emitter, bot->danger.escape_yaw, 1.f);
+    }
+    else
+        bot->objective_waiting = TRUE; /* no validated escape: suppress generic recovery */
     return ENGINE_AI_BEHAVIOR_RUNNING;
 }
 
@@ -3754,12 +3804,47 @@ static real bot_confidence(
 
 /* every behavior's score, 0 to 1 (docs/bot_decisions.md, "Scores"); zero
 for one that cannot run */
+/* Behavior utility and object distance are separate decisions. Only the
+ * selector's gate may consume an ambition slot after these read-only peeks. */
+static void bot_score_objectives(struct bot *bot, struct player_datum const *player,
+	real_point3d const *origin, struct bot_decision_inputs const *snapshot)
+{
+	struct bot_decision_inputs inputs = *snapshot;
+	float outputs[BOT_GOAL_OUTPUT_COUNT];
+	float candidate_scores[BOT_BEHAVIOR_COUNT];
+	enum bot_ambition_kind kind;
+	if (inputs.seated || inputs.navigation_only ||
+		!game_engine_ctf_bot_variant_supported(game_engine_get_variant()))
+		return;
+	/* Score EVERY available goal behavior without claiming its object. */
+	for (kind = _bot_ambition_take; kind < NUMBER_OF_BOT_AMBITION_KINDS; kind++)
+	{
+		struct bot_ambition candidate;
+		uint32_t leaf = bot_decision_objective_leaf(kind);
+		long excluded = game_time_get() < bot->objective_retry_time ?
+			bot->objective_unreachable_index : NONE;
+		if (!bot_manager_find_ambition(player->team_index, bot->player_index,
+			(short)(bot->slot + 1), kind, excluded, origin, FALSE, &candidate))
+		{
+			bot->scores[leaf - 1] = 0.f;
+			continue;
+		}
+		inputs.objective_valid = TRUE;
+		inputs.objective_kind = kind;
+		inputs.objective_value = candidate.value;
+		bot_goal_policy_ce_outputs(bots_globals.tuning, &inputs, outputs);
+		bot_decision_evaluate(&inputs, outputs, candidate_scores);
+		bot->scores[leaf - 1] = candidate_scores[leaf - 1];
+	}
+}
+
 static void bot_score_behaviors(
 	struct bot *bot,
 	struct player_datum const *player,
 	struct unit_datum const *unit)
 {
 	struct bot_decision_inputs inputs = {0};
+	float outputs[BOT_GOAL_OUTPUT_COUNT];
 	real_point3d origin;
 	real_point3d point;
 
@@ -3769,6 +3854,8 @@ static void bot_score_behaviors(
 	inputs.seated = unit->object.parent_object_index != NONE;
 	inputs.navigation_only = bots_globals.navigation_only;
 	inputs.danger = game_time_get() < bot->danger_until;
+	inputs.playfighting = bots_globals.playfighting;
+	inputs.fight_disabled = !(bots_globals.combat_enabled_mask & (1u << (BOT_COMBAT_FIGHT - 1)));
 	inputs.objective_valid = bot->objective_valid;
 	inputs.objective_kind = (enum bot_ambition_kind)bot->objective.kind;
 	inputs.objective_value = bot->objective.value;
@@ -3798,7 +3885,11 @@ static void bot_score_behaviors(
 			inputs.opportunity_in_reach = bot_horizontal_distance(&origin, &point) < 2.5f;
 		}
 	}
-	bot_decision_score(bots_globals.tuning, &inputs, bot->scores);
+	/* The script supplier is temporary; native evaluators and ambition gates
+	are not allowed to inspect or reproduce its CE curves. */
+	bot_goal_policy_ce_outputs(bots_globals.tuning, &inputs, outputs);
+	bot_decision_evaluate(&inputs, outputs, bot->scores);
+	bot_score_objectives(bot, player, &origin, &inputs);
 }
 
 static engine_ai_behavior_result bot_behavior_tick_plain(
@@ -4559,7 +4650,7 @@ static void bot_steer_movement(
 	/* A capsule-checked BSP route may legitimately hug a wall. Inflating the
 	pill first made steering choose a roomy sideways heading and miss the
 	waypoint forever. Physics and the exact live sweep still own clearance. */
-	real clearance = bot->navigation_agent.following ? 0.f :
+	real clearance = bot->navigation_agent.following || bot->chosen_leaf == _bot_leaf_avoid ? 0.f :
 		bot->chosen_leaf == _bot_leaf_retreat ? 0.02f : 0.12f;
 	real probe_distance = 0.65f;
 	short pass;
@@ -4587,7 +4678,10 @@ static void bot_steer_movement(
 	}
 	for (pass = 0; pass < 2; pass++)
 	{
-		for (candidate = 0; candidate < (short)NUMBEROF(offsets); candidate++)
+		/* Avoid already selected a forward/support-validated candidate. Do
+		not replace it with an unvalidated generic crowd-steering direction. */
+		for (candidate = 0; candidate < (bot->chosen_leaf == _bot_leaf_avoid ?
+			1 : (short)NUMBEROF(offsets)); candidate++)
 		{
 			real yaw = bot_angle_normalize(preferred + offsets[candidate]);
 
@@ -4993,6 +5087,49 @@ static void bot_debug_sandbox(struct bot *bot)
 once when the running leaf can no longer run or has finished. Between
 decisions the running leaf continues: a bot reacts as a person does, after a
 moment, not every tick. */
+/* Rank behaviors first; claim an ambition only when trying that behavior.
+A rejected candidate never replaces the running goal or its claim. */
+static bool bot_behavior_ambition_gate(void *context, uint32_t leaf)
+{
+	struct bot *bot = (struct bot *)context;
+	struct player_datum *player = bot_player(bot);
+	struct bot_ambition goal;
+	real_point3d origin;
+	enum bot_ambition_kind kind;
+	long now = game_time_get();
+	long excluded = now < bot->objective_retry_time ? bot->objective_unreachable_index : NONE;
+
+	if (!bot_decision_is_objective_leaf(leaf))
+		return bot_leaf_viable(bot, leaf) != 0;
+	if (!player || bots_globals.navigation_only)
+		return false;
+	/* The recovered gate accepts an existing matching-type claim before
+	trying to acquire another object. Do not churn it on distance changes. */
+	if (bot->objective_valid && bot_decision_objective_leaf(
+		(enum bot_ambition_kind)bot->objective.kind) == leaf &&
+		bot_manager_goal_claimed((short)(bot->slot + 1), &bot->objective))
+		return true;
+	for (kind = _bot_ambition_take; kind < NUMBER_OF_BOT_AMBITION_KINDS; kind++)
+	{
+		if (bot_decision_objective_leaf(kind) == leaf)
+			break;
+	}
+	object_get_origin(bot->unit_index, &origin);
+	if (!bot_manager_find_ambition(player->team_index, bot->player_index,
+		(short)(bot->slot + 1), kind, excluded, &origin, TRUE, &goal))
+		return false;
+	if (!bot->objective_valid ||
+		!bot_ambition_identity_equal(&goal.identity, &bot->objective.identity))
+	{
+		bot_objective_release(bot); /* expected identity protects the replacement */
+		bot_navigation_reset(bot);
+		bot->objective_deadline = now + 60 * TICKS_PER_SECOND;
+	}
+	bot->objective = goal;
+	bot->objective_valid = TRUE;
+	return true;
+}
+
 static void bot_decide(
 	struct bot *bot,
 	struct player_datum const *player,
@@ -5009,15 +5146,15 @@ static void bot_decide(
 	{
 		BOT_BEHAVIOR_COUNT, BOT_DECISION_TICKS,
 		(uint32_t)bot_seconds_to_ticks(profile->hysteresis_seconds),
-		profile->hysteresis_bonus, profile->switch_margin
+		profile->hysteresis_bonus, 0.f
 	};
 
 	if (!force && !first && (uint64_t)now < bot->selector.next_decision_tick)
 		return;
 	bot->decide_now = FALSE;
 	bot_score_behaviors(bot, player, unit);
-	decision = engine_ai_utility_select(&bot->selector, &config, bot->scores,
-		(uint64_t)now, force, &chosen);
+	decision = bot_decision_select(&bot->selector, &config, bot->scores,
+		(uint64_t)now, force, bot_behavior_ambition_gate, bot, &chosen);
 	if (decision == ENGINE_AI_UTILITY_INVALID)
 		return;
 	/* (bots that spawn together decide on different ticks from then on) */
@@ -5040,6 +5177,11 @@ static void bot_decide(
 	{
 		bot_drop_opportunity(bot, leaf == bot->chosen_leaf ? "behavior not selected" : "behavior changed");
 		bot->opportunity_scan_time = now + bot_seconds_to_ticks(3.f);
+	}
+	if (!bot_decision_is_objective_leaf(leaf))
+	{
+		bot_objective_release(bot);
+		bot->objective_valid = FALSE;
 	}
 	if (leaf == bot->chosen_leaf)
 		return;
@@ -5121,6 +5263,8 @@ static void bot_think(
 	}
 	if (player->unit_index != bot->unit_index)
 		bot_reset_life(bot, player->unit_index);
+	bot->navigation_agent.reach_distance_squared =
+		bot_active_profile(bot)->route_reach_distance_squared;
 	bot_update_combat(bot, unit);
 
 	/* port: a scenario holds its bots between trials, scripts its targets, and

@@ -1,36 +1,11 @@
-/* CE utility policy behind an engine-independent input/output seam.
- * Architecture reference: halo-rea/readable/bots/DecisionLoop.cpp, section 4.
- * Formulas and defaults below preserve our CE policy, not recovered Lua. */
+/* Recovered evaluator split (DecisionLoop.cpp): goals read supplied outputs;
+ * fight is native. No CE scoring curves, world reads, or claim side effects.
+ * Unsupported Infinite actions are not invented as CE controls. */
 #include "bot_decision.h"
 
 #include <assert.h>
 #include <stddef.h>
-
-static struct bot_utility_tuning const bot_slayer_tuning =
-{
-    0.95f, /* vehicle */
-    0.15f, /* patrol */
-    0.9f, 0.85f, 0.55f, 0.28f, /* seen, attacker, remembered, shared cap */
-    { ENGINE_AI_UTILITY_LINEAR, 50.f, 0.f, 0.6f, 1.f, 0 },
-    { ENGINE_AI_UTILITY_LINEAR, 0.f, 1.f, 0.5f, 1.f, 0 },
-    { ENGINE_AI_UTILITY_POWER, 0.5f, 0.f, 0.f, 1.f, 2 },
-    0.85f, /* retreat cap */
-    0.6f, 0.8f, 0.75f, 0.95f, /* weapon, powerup, vehicle, in reach */
-    { ENGINE_AI_UTILITY_LINEAR, 30.f, 0.f, 0.45f, 1.f, 0 },
-    { ENGINE_AI_UTILITY_LINEAR, 35.f, 0.f, 0.2f, 1.f, 0 },
-    { 3.f, 2.f, 1.f, 1.f },
-    15.f /* teammate radius */
-};
-
-static void bot_decision_combat(struct bot_utility_tuning const *tuning,
-    struct bot_decision_inputs const *inputs, float *scores);
-static void bot_decision_scavenge(struct bot_utility_tuning const *tuning,
-    struct bot_decision_inputs const *inputs, float *scores);
-
-struct bot_utility_tuning const *bot_decision_default_tuning(void)
-{
-    return &bot_slayer_tuning;
-}
+#include <math.h>
 
 uint32_t bot_decision_objective_leaf(enum bot_ambition_kind kind)
 {
@@ -64,108 +39,108 @@ bool bot_decision_is_pickup_leaf(uint32_t leaf)
         leaf == _bot_leaf_enter_vehicle;
 }
 
-void bot_decision_score(struct bot_utility_tuning const *tuning,
-    struct bot_decision_inputs const *inputs, float scores[BOT_BEHAVIOR_COUNT])
+static enum bot_goal_output bot_decision_objective_output(enum bot_ambition_kind kind)
+{
+    switch (kind) {
+    case _bot_ambition_take:
+    case _bot_ambition_return: return BOT_GOAL_PICKUP;
+    case _bot_ambition_deliver: return BOT_GOAL_DELIVER;
+    case _bot_ambition_guard: return BOT_GOAL_GUARD;
+    case _bot_ambition_hunt: return BOT_GOAL_HUNT;
+    case _bot_ambition_hide: return BOT_GOAL_HIDE;
+    default: return BOT_GOAL_TRAVERSAL; /* CE hold/reach map to a traversal goal. */
+    }
+}
+
+void bot_decision_evaluate(struct bot_decision_inputs const *inputs,
+    float const outputs[BOT_GOAL_OUTPUT_COUNT], float scores[BOT_BEHAVIOR_COUNT])
 {
     uint32_t index;
     uint32_t objective;
-    uint32_t pickup;
-    bool duty;
-    assert(tuning != NULL);
     assert(inputs != NULL);
+    assert(outputs != NULL);
     assert(scores != NULL);
-    objective = bot_decision_objective_leaf(inputs->objective_kind);
-    pickup = bot_decision_pickup_leaf(inputs->opportunity_vehicle, inputs->opportunity_powerup);
-    duty = inputs->objective_valid && objective != _bot_leaf_none;
     for (index = 0; index < BOT_BEHAVIOR_COUNT; index++) {
         scores[index] = 0.f;
     }
+    scores[_bot_leaf_retreat - 1] = -2.f; /* legacy CE root leaf, not native disengage */
     if (inputs->seated) {
-        scores[_bot_leaf_vehicle - 1] = tuning->vehicle;
+        scores[_bot_leaf_vehicle - 1] = outputs[BOT_GOAL_PASSENGER_RIDE];
         return;
     }
-    if (inputs->danger && !inputs->navigation_only) {
-        scores[_bot_leaf_avoid - 1] = 0.9f; /* recovered avoid utility */
-    }
-    scores[_bot_leaf_roam - 1] = tuning->roam;
-    if (inputs->opportunity_relevant && inputs->offered_ride &&
-        !(duty && inputs->objective_kind == _bot_ambition_deliver)) {
-        scores[_bot_leaf_enter_vehicle - 1] = 1.f;
-        return;
-    }
-    if (duty && inputs->objective_kind != _bot_ambition_guard &&
-        inputs->objective_kind != _bot_ambition_deliver &&
-        inputs->opportunity_relevant && inputs->opportunity_vehicle) {
-        scores[pickup - 1] = inputs->objective_value;
-        return;
-    }
-    if (duty) {
-        scores[objective - 1] = inputs->objective_value;
-        if (inputs->objective_kind != _bot_ambition_guard) {
-            return;
+    scores[_bot_leaf_roam - 1] = outputs[BOT_GOAL_TRAVERSAL];
+    objective = bot_decision_objective_leaf(inputs->objective_kind);
+    if (inputs->objective_valid && objective != _bot_leaf_none) {
+        scores[objective - 1] = outputs[bot_decision_objective_output(inputs->objective_kind)];
+        if (inputs->objective_kind == _bot_ambition_hold || inputs->objective_kind == _bot_ambition_reach) {
+            scores[_bot_leaf_roam - 1] = 0.f; /* same traversal evaluator, authored destination */
         }
     }
-    /* Preserve the existing navigation fixture's priority after duties. */
+    if (inputs->opportunity_relevant) {
+        uint32_t pickup = bot_decision_pickup_leaf(inputs->opportunity_vehicle,
+            inputs->opportunity_powerup);
+        scores[pickup - 1] = outputs[inputs->opportunity_vehicle ? BOT_GOAL_DRIVER_ENTER :
+            (inputs->opportunity_powerup ? BOT_GOAL_EQUIPMENT : BOT_GOAL_WEAPON)];
+    }
     if (inputs->navigation_only) {
         return;
     }
-    bot_decision_combat(tuning, inputs, scores);
-    bot_decision_scavenge(tuning, inputs, scores);
+    scores[_bot_leaf_fight - 1] = inputs->fight_disabled ? -2.f :
+        (inputs->target_known ? (inputs->playfighting ? 2.f : 0.5f) : 0.f);
+    scores[_bot_leaf_avoid - 1] = inputs->danger ? 0.9f : 0.f;
+    /* Disengage is a child combat action, not the old shield-weighted root
+     * retreat policy. bot_combat.c owns its recovered 0.7 evaluator. */
 }
 
-static void bot_decision_combat(struct bot_utility_tuning const *tuning,
-    struct bot_decision_inputs const *inputs, float *scores)
+engine_ai_utility_decision bot_decision_select(engine_ai_utility_selector *selector,
+    engine_ai_utility_selector_config const *config, float const *scores,
+    uint64_t tick, bool force, bot_decision_gate gate, void *context, uint32_t *chosen)
 {
-    float known;
-    float fight;
-    if (!inputs->target_known) {
-        return;
+    uint32_t pass;
+    uint32_t index;
+    uint32_t best = ENGINE_AI_UTILITY_NONE;
+    uint32_t tried = 0;
+    uint32_t previous;
+    float hysteresis;
+    if (!selector || !selector->initialized || !scores || !chosen || !gate ||
+        !engine_ai_utility_config_valid(config) || config->option_count > 32) {
+        return ENGINE_AI_UTILITY_INVALID;
     }
-    switch (inputs->target_source) {
-    case _bot_target_seen: known = tuning->fight_seen; break;
-    case _bot_target_attacker: known = tuning->fight_attacker; break;
-    case _bot_target_remembered: known = tuning->fight_remembered; break;
-    default: known = tuning->fight_shared_cap; break;
+    for (index = 0; index < config->option_count; index++) {
+        if (!isfinite(scores[index])) {
+            return ENGINE_AI_UTILITY_INVALID;
+        }
     }
-    fight = known * engine_ai_utility_curve_evaluate(
-        &tuning->fight_distance, inputs->target_distance) *
-        engine_ai_utility_curve_evaluate(&tuning->fight_confidence, inputs->confidence);
-    if (inputs->target_source == _bot_target_shared && fight > tuning->fight_shared_cap) {
-        fight = tuning->fight_shared_cap;
+    previous = selector->current;
+    if (!force && previous < config->option_count && scores[previous] > 0.f &&
+        tick >= selector->chosen_tick && tick < selector->next_decision_tick) {
+        *chosen = previous;
+        return ENGINE_AI_UTILITY_WAITING;
     }
-    /* CE adaptation: while a physical hazard is observed, use native fight's
-     * 0.5 ceiling so a legacy high-confidence fight cannot tie/stall avoid. */
-    if (inputs->danger && fight > 0.5f) {
-        fight = 0.5f;
+    hysteresis = engine_ai_utility_hysteresis(selector, config, tick);
+    for (pass = 0; pass < config->option_count; pass++) {
+        float best_score = -1.f;
+        best = ENGINE_AI_UTILITY_NONE;
+        for (index = 0; index < config->option_count; index++) {
+            float score = scores[index] + (index == previous && scores[index] > 0.f ? hysteresis : 0.f);
+            if (!(tried & (1u << index)) && score > best_score) {
+                best = index;
+                best_score = score;
+            }
+        }
+        if (best == ENGINE_AI_UTILITY_NONE || gate(context, best + 1)) {
+            break;
+        }
+        tried |= 1u << best;
+        best = ENGINE_AI_UTILITY_NONE;
     }
-    scores[_bot_leaf_fight - 1] = fight;
-    if (inputs->retreat_allowed && inputs->target_source != _bot_target_shared) {
-        float retreat = (1.f - inputs->confidence) * engine_ai_utility_curve_evaluate(
-            &tuning->retreat_shields, inputs->shields);
-        scores[_bot_leaf_retreat - 1] = retreat < tuning->retreat_cap ?
-            retreat : tuning->retreat_cap;
+    selector->next_decision_tick = config->decision_interval > UINT64_MAX - tick ?
+        UINT64_MAX : tick + config->decision_interval;
+    if (best != previous || tick < selector->chosen_tick) {
+        selector->chosen_tick = tick;
     }
-}
-
-static void bot_decision_scavenge(struct bot_utility_tuning const *tuning,
-    struct bot_decision_inputs const *inputs, float *scores)
-{
-    float value;
-    uint32_t pickup = bot_decision_pickup_leaf(inputs->opportunity_vehicle, inputs->opportunity_powerup);
-    engine_ai_utility_curve const *distance_curve;
-    if (!inputs->opportunity_relevant || !inputs->opportunity_distance_known) {
-        return;
-    }
-    if (inputs->opportunity_in_reach) {
-        scores[pickup - 1] = tuning->scavenge_in_reach;
-        return;
-    }
-    value = inputs->opportunity_powerup ? tuning->scavenge_powerup : tuning->scavenge_weapon;
-    distance_curve = &tuning->scavenge_distance;
-    if (inputs->opportunity_vehicle) {
-        value = tuning->scavenge_vehicle;
-        distance_curve = &tuning->scavenge_vehicle_distance;
-    }
-    scores[pickup - 1] = value *
-        engine_ai_utility_curve_evaluate(distance_curve, inputs->opportunity_distance);
+    selector->current = best;
+    *chosen = best;
+    return best == ENGINE_AI_UTILITY_NONE ? ENGINE_AI_UTILITY_IDLE :
+        (best == previous ? ENGINE_AI_UTILITY_KEPT : ENGINE_AI_UTILITY_CHANGED);
 }

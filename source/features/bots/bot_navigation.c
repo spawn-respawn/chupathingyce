@@ -32,7 +32,8 @@ Halo physics.
 #include "navigation_world.h"
 #include "map_anchors.h"
 #include "bot_navigation.h"
-#include "engine_ai/surface_navigation_jobs.h"
+#include "bot_route_solver_ce.h"
+#include "bot_movement.h"
 
 /* port/linux/src/platform.h's */
 void platform_log(char const *format, ...);
@@ -46,7 +47,9 @@ enum
 	BOT_NAVIGATION_TICKS_PER_METRE = TICKS_PER_SECOND, /* (bots walk faster than 1 m/s) */
 	BOT_NAVIGATION_PROGRESS_TICKS = TICKS_PER_SECOND,
 	BOT_NAVIGATION_REPLAN_DISTANCE = 12,
+	BOT_NAVIGATION_REQUEST_TICKS = (TICKS_PER_SECOND + 9) / 10, /* recovered 0.1s timer */
 	BOT_NAVIGATION_GOAL_ATTEMPTS = 16,
+	BOT_NAVIGATION_WAYPOINT_LOOKAHEAD = 6,
 };
 
 #define BOT_NAVIGATION_MINIMUM_GOAL_DISTANCE 12.f
@@ -64,15 +67,6 @@ land on: look down this far, in bands of half the projection height; a point
 against a wall or on a seam may move this far toward a usable polygon. */
 #define BOT_NAVIGATION_GROUND_DEPTH 3.f
 #define BOT_NAVIGATION_GROUND_HORIZONTAL 1.f
-
-/* Only this host's simulation thread uses these. Client n is bot number n+1.
-Tokens are never reused, even across map resets, so a delayed consumer cannot
-take another request's work; no borrowed unit pointers survive a tick. */
-static struct sn_jobs navigation_jobs;
-static long navigation_units[BOT_NAVIGATION_AGENTS_MAX]; /* the body its checks ignore */
-static uint64_t navigation_tokens[BOT_NAVIGATION_AGENTS_MAX]; /* its latest request */
-static long navigation_polled[BOT_NAVIGATION_AGENTS_MAX]; /* when its agent last asked */
-static uint64_t navigation_token;
 
 /* ---------- private prototypes */
 
@@ -100,6 +94,8 @@ static enum bot_navigation_result bot_nav_route_step(struct bot_navigation_agent
 static void bot_nav_log_failure(struct bot_navigation_agent *agent,
 	struct sn_resource const *resource, enum sn_status status,
 	struct sn_jobs_diagnostics const *query);
+static boolean bot_nav_install(struct bot_navigation_agent *agent,
+	long unit_index, struct sn_resource const *resource, struct sn_point origin);
 static enum bot_navigation_result bot_nav_search(struct bot_navigation_agent *agent,
 	long unit_index, struct sn_resource const *resource, struct sn_point start);
 static enum bot_navigation_result bot_nav_stuck(struct bot_navigation_agent *agent,
@@ -107,73 +103,18 @@ static enum bot_navigation_result bot_nav_stuck(struct bot_navigation_agent *age
 	char const *reason);
 static enum bot_navigation_result bot_nav_follow(struct bot_navigation_agent *agent,
 	long unit_index, struct sn_resource const *resource, struct sn_point origin,
-	real speed, boolean patrol, struct bot_navigation_command *command);
+	real speed, real arrival_distance, boolean patrol, struct bot_navigation_command *command);
 
 /* ---------- public code */
 
-/* The scheduler's collision check for a client: the structure and scenery
-(navigation_world_search_clear), ignoring the body its bot has now. */
-static bool bot_nav_search_clear(void *context, uint32_t client, uint64_t token,
-	struct sn_point a, uint32_t ap, struct sn_point b, uint32_t bp)
-{
-	struct unit_datum *unit;
-	long unit_index;
-
-	(void)context;
-	if (client >= BOT_NAVIGATION_AGENTS_MAX || token != navigation_tokens[client])
-		return false;
-	unit_index = navigation_units[client];
-	unit = unit_index != NONE ? unit_try_and_get(unit_index) : NULL;
-	if (!unit || TEST_FLAG(unit->object.damage_flags, _object_dead_bit))
-		return false;
-	return navigation_world_search_clear(&unit_index, a, ap, b, bp);
-}
-
 void bot_navigation_reset_all(void)
 {
-	uint32_t client;
-
-	sn_jobs_reset(&navigation_jobs);
-	for (client = 0; client < BOT_NAVIGATION_AGENTS_MAX; client++)
-	{
-		navigation_units[client] = NONE;
-		navigation_tokens[client] = 0;
-		navigation_polled[client] = NONE;
-	}
+	bot_route_solver_ce_reset();
 }
 
 void bot_navigation_update(void)
 {
-	struct sn_resource const *resource = navigation_world_resource();
-	long now = game_time_get();
-	uint32_t client;
-
-	if (!resource)
-	{
-		bot_navigation_reset_all();
-		return;
-	}
-	/* (at most 32 clients) A request its agent did not ask after last tick
-	was abandoned: its leaf changed, or its bot left or was replaced. One whose
-	body died or was deleted cannot be checked. Either gives its place back. */
-	for (client = 0; client < BOT_NAVIGATION_AGENTS_MAX; client++)
-	{
-		struct unit_datum *unit;
-
-		if (!sn_jobs_active(&navigation_jobs, client, navigation_tokens[client]))
-			continue;
-		unit = navigation_units[client] != NONE ? unit_try_and_get(navigation_units[client]) : NULL;
-		if (unit && !TEST_FLAG(unit->object.damage_flags, _object_dead_bit) &&
-			navigation_polled[client] != NONE && navigation_polled[client] <= now &&
-			now - navigation_polled[client] <= 1)
-		{
-			continue;
-		}
-		sn_jobs_cancel(&navigation_jobs, client, navigation_tokens[client]);
-		navigation_units[client] = NONE;
-	}
-	sn_jobs_step(&navigation_jobs, resource, BOT_NAVIGATION_ROUTE_OBSTACLES,
-		(uint64_t)now, bot_nav_search_clear, NULL);
+	bot_route_solver_ce_update();
 }
 
 void bot_navigation_agent_initialize(
@@ -189,9 +130,7 @@ void bot_navigation_agent_initialize(
 	/* (a request left by this slot's last bot is not this one's) */
 	if (bot_number > 0 && bot_number <= BOT_NAVIGATION_AGENTS_MAX)
 	{
-		sn_jobs_cancel(&navigation_jobs, (uint32_t)(bot_number - 1),
-			navigation_tokens[bot_number - 1]);
-		navigation_units[bot_number - 1] = NONE;
+		bot_route_solver_ce_cancel((uint32_t)(bot_number - 1), 0);
 	}
 	csmemset(agent, 0, sizeof(*agent));
 	agent->bot_number = bot_number;
@@ -199,6 +138,7 @@ void bot_navigation_agent_initialize(
 	agent->team_rank = team_rank;
 	agent->lane_index = NONE;
 	agent->progress_tick = NONE;
+	agent->reach_distance_squared = 0.2025f; /* provisional CE profile default */
 	if (team_index == NONE || team_rank < 0)
 		return;
 
@@ -219,8 +159,7 @@ void bot_navigation_agent_reset_path(
 		return;
 	if (bot_nav_client(agent, &client))
 	{
-		sn_jobs_cancel(&navigation_jobs, client, navigation_tokens[client]);
-		navigation_units[client] = NONE;
+		bot_route_solver_ce_cancel(client, agent->search_token);
 	}
 	if (agent->searching)
 	{
@@ -341,7 +280,7 @@ static boolean bot_nav_refresh(
 	uint32_t client;
 
 	return bot_nav_client(agent, &client) &&
-		sn_jobs_refresh(&navigation_jobs, client, agent->search_token, start, goal);
+		bot_route_solver_ce_refresh(client, agent->search_token, start, goal);
 }
 
 /* Surface-navigation points use the ground-foot coordinate, not the pill's
@@ -667,7 +606,17 @@ static enum bot_navigation_result bot_nav_route_step(
 		if (result != BOT_NAVIGATION_MOVING)
 			return result;
 	}
-	return bot_nav_follow(agent, unit_index, resource, origin, speed, patrol, command);
+	result = bot_nav_follow(agent, unit_index, resource, origin, speed, arrival_distance, patrol, command);
+	/* Finishing a route is not reaching the current tactical goal. A target
+	may have moved less than the replan threshold, or projection repaired its
+	endpoint. Only the proximity test above can report tactical arrival. */
+	if (!patrol && result == BOT_NAVIGATION_ARRIVED)
+	{
+		agent->goal = goal;
+		agent->goal_valid = TRUE;
+		return bot_nav_search(agent, unit_index, resource, origin);
+	}
+	return result;
 }
 
 /* One line per failed search. The kind separates an endpoint that does not
@@ -711,18 +660,14 @@ static enum bot_navigation_result bot_nav_search(
 	struct sn_resource const *resource,
 	struct sn_point start)
 {
-	struct sn_jobs_request request;
-	struct sn_jobs_diagnostics diagnostics;
+	struct sn_jobs_diagnostics diagnostics = {0};
 	enum sn_status status;
 	uint32_t client;
 	long now = game_time_get();
 
 	if (!bot_nav_client(agent, &client))
 		return BOT_NAVIGATION_FAILED;
-	/* (asked after this tick, checked with the body the bot has now) */
-	navigation_units[client] = unit_index;
-	navigation_polled[client] = now;
-	if (agent->searching && !sn_jobs_active(&navigation_jobs, client, agent->search_token))
+	if (agent->searching && !bot_route_solver_ce_active(client, agent->search_token))
 	{
 		/* (dropped by a reset of the scheduler: ask again, at the back) */
 		platform_log("bots: bot %d surface %s search request lost after %ld ticks; asking again",
@@ -731,20 +676,17 @@ static enum bot_navigation_result bot_nav_search(
 	}
 	if (!agent->searching)
 	{
-		/* (one request per client: any older one of this slot's is let go) */
-		sn_jobs_cancel(&navigation_jobs, client, navigation_tokens[client]);
-		csmemset(&request, 0, sizeof(request));
-		request.start = start;
-		request.goal = agent->goal;
-		request.ground_depth = BOT_NAVIGATION_GROUND_DEPTH;
-		request.ground_horizontal = BOT_NAVIGATION_GROUND_HORIZONTAL;
-		request.obstacle_revision = BOT_NAVIGATION_ROUTE_OBSTACLES;
-		/* A tactical goal is a unit's or item's position: an enemy standing there
-		would refuse the last segment, though the route to it is open. */
-		request.check_goal_segment = agent->patrol_goal ? true : false;
-		request.straighten = true;
-		navigation_tokens[client] = ++navigation_token;
-		if (!sn_jobs_submit(&navigation_jobs, client, navigation_tokens[client], resource, &request))
+		/* Request throttling is not a universal movement/decision update rate.
+		A rewound host clock cannot leave a timer armed in the old future. */
+		if (agent->next_request_tick > now + BOT_NAVIGATION_REQUEST_TICKS)
+			agent->next_request_tick = now;
+		if (now < agent->next_request_tick)
+			return BOT_NAVIGATION_WAITING;
+		/* Allocation is not installation. All upstream route production lives
+		in the explicitly temporary CE adapter, not the recovered follower. */
+		agent->search_token = bot_route_solver_ce_begin(client, unit_index, resource,
+			start, agent->goal, agent->patrol_goal != 0);
+		if (!agent->search_token)
 		{
 			platform_log("bots: bot %d surface %s search not queued: start (%.1f %.1f %.1f) "
 				"goal (%.1f %.1f %.1f)", agent->bot_number, agent->patrol_goal ? "patrol" : "tactical",
@@ -752,15 +694,15 @@ static enum bot_navigation_result bot_nav_search(
 			bot_navigation_agent_reset_path(agent);
 			return BOT_NAVIGATION_FAILED;
 		}
-		agent->search_token = navigation_tokens[client];
 		agent->searching = TRUE;
+		agent->next_request_tick = now + BOT_NAVIGATION_REQUEST_TICKS;
 		agent->search_tick = now;
 		return BOT_NAVIGATION_WAITING;
 	}
-	if (sn_jobs_status(&navigation_jobs, client, agent->search_token) == SN_RUNNING)
+	status = bot_route_solver_ce_poll(client, agent->search_token, unit_index,
+		resource, &agent->route, &diagnostics);
+	if (status == SN_RUNNING)
 		return BOT_NAVIGATION_WAITING;
-	status = sn_jobs_take(&navigation_jobs, client, agent->search_token, resource,
-		BOT_NAVIGATION_ROUTE_OBSTACLES, &agent->route, &diagnostics);
 	agent->searching = FALSE; /* (finished, not abandoned) */
 	if (status != SN_FOUND)
 	{
@@ -769,17 +711,15 @@ static enum bot_navigation_result bot_nav_search(
 		return BOT_NAVIGATION_FAILED;
 	}
 
-	agent->following = TRUE;
-	/* (waypoint 0 is where the bot stood when the search began) */
-	agent->waypoint = agent->route.count > 1 ? 1 : 0;
+	if (!bot_nav_install(agent, unit_index, resource, start))
+	{
+		bot_navigation_agent_reset_path(agent);
+		return BOT_NAVIGATION_FAILED;
+	}
 	agent->search_tick = now - agent->search_tick;
 	agent->progress_tick = now;
 	agent->progress_position = start;
 	agent->stuck_count = 0;
-	agent->waypoint_deadline = NONE;
-	agent->jump_waypoint = SN_NONE;
-	agent->jump_active = FALSE;
-	agent->jump_airborne = FALSE;
 	platform_log("bots: bot %d team %ld lane %d squad %ld surface %s route goal "
 		"(%.1f %.1f %.1f) waypoints %lu search %ld ticks, %lu slices", agent->bot_number,
 		agent->team_index, agent->lane_index, agent->squad_index,
@@ -791,19 +731,77 @@ static enum bot_navigation_result bot_nav_search(
 	return BOT_NAVIGATION_MOVING;
 }
 
+/* Installation is distinct from submitting a request. Rejoin a nearby segment
+only within the current convex floor polygon and after a capsule check: a
+clear ray alone does not establish floor support across a gap. The six-segment
+cap is CE policy, not a recovered Infinite constant. */
+static boolean bot_nav_install(
+	struct bot_navigation_agent *agent,
+	long unit_index,
+	struct sn_resource const *resource,
+	struct sn_point origin)
+{
+	uint32_t polygon;
+	uint32_t index;
+	struct sn_point projected;
+	real best = 4.f; /* Only rejoin segments within two metres. */
+
+	agent->following = FALSE;
+	if (agent->route.count == 0 || agent->route.count > SN_WAYPOINTS_MAX ||
+		!sn_route_current(&agent->route, resource, BOT_NAVIGATION_ROUTE_OBSTACLES))
+		return FALSE;
+	agent->waypoint = agent->route.count > 1 ? 1 : 0;
+	agent->waypoint_deadline = NONE;
+	agent->occupant_wait_ticks = 0;
+	agent->jump_waypoint = SN_NONE;
+	agent->jump_active = FALSE;
+	agent->jump_airborne = FALSE;
+	if (sn_project(resource, origin, &polygon, &projected) == SN_FOUND)
+	{
+		for (index = 1; index < agent->route.count &&
+			index <= BOT_NAVIGATION_WAYPOINT_LOOKAHEAD; index++)
+		{
+			struct sn_point a = agent->route.points[index - 1];
+			struct sn_point b = agent->route.points[index];
+			real dx = b.x - a.x;
+			real dy = b.y - a.y;
+			real length_squared = dx * dx + dy * dy;
+			real fraction;
+			real distance_squared;
+
+			if (agent->route.polygons[index - 1] != polygon ||
+				agent->route.polygons[index] != polygon || length_squared < 0.0001f)
+				continue;
+			fraction = PIN(((origin.x - a.x) * dx + (origin.y - a.y) * dy) /
+				length_squared, 0.f, 1.f);
+			dx = origin.x - (a.x + fraction * dx);
+			dy = origin.y - (a.y + fraction * dy);
+			distance_squared = dx * dx + dy * dy;
+			if (distance_squared >= best ||
+				!navigation_world_search_clear(&unit_index, origin, polygon, b, polygon))
+				continue;
+			best = distance_squared;
+			agent->waypoint = index;
+		}
+	}
+	agent->following = TRUE;
+	return TRUE;
+}
+
 static enum bot_navigation_result bot_nav_follow(
 	struct bot_navigation_agent *agent,
 	long unit_index,
 	struct sn_resource const *resource,
 	struct sn_point origin,
 	real speed,
+	real arrival_distance,
 	boolean patrol,
 	struct bot_navigation_command *command)
 {
 	struct sn_point target;
 	uint32_t polygon;
 	uint32_t index;
-	real distance;
+	struct sn_point direction;
 	long now = game_time_get();
 	long ignored_unit = unit_index;
 
@@ -828,25 +826,17 @@ static enum bot_navigation_result bot_nav_follow(
 			agent->jump_active = FALSE;
 		}
 	}
-	/* A waypoint is reached within 0.45 m, or passed: the bot is near it and
-	already closer to the following waypoint than the waypoint itself is.
-	Without the second test a bot that slides by at 0.5 m turns back for it. */
-	while (agent->waypoint < agent->route.count)
+	/* Bot-specific recovery compares squared distance to an already-squared
+	active-profile threshold and advances ONE point per update. No CE
+	"passed corner" heuristic or ordinary-AI segment completion predicate. */
+	if (agent->waypoint < agent->route.count)
 	{
-		struct sn_point next = agent->route.points[agent->waypoint];
-		real away = bot_nav_horizontal_distance(origin, next);
-
-		if (away >= 0.45f || bot_nav_abs(origin.z - next.z) >= 0.35f)
-		{
-			struct sn_point after;
-
-			if (agent->waypoint + 1 >= agent->route.count || away >= 2.f)
-				break;
-			after = agent->route.points[agent->waypoint + 1];
-			if (bot_nav_horizontal_distance(origin, after) >= bot_nav_horizontal_distance(next, after))
-				break;
-		}
-		agent->waypoint++;
+		real threshold = agent->reach_distance_squared;
+		if (!patrol && agent->waypoint + 1 == agent->route.count)
+			threshold = MIN(threshold, arrival_distance * arrival_distance);
+		if (bot_movement_point_reached(origin, agent->route.points[agent->waypoint],
+			threshold, false))
+			agent->waypoint++;
 	}
 	if (agent->waypoint >= agent->route.count)
 	{
@@ -929,7 +919,6 @@ static enum bot_navigation_result bot_nav_follow(
 		agent->occupant_wait_ticks++;
 		return BOT_NAVIGATION_WAITING;
 	}
-	distance = bot_nav_horizontal_distance(origin, target);
 	if (agent->jump_waypoint != agent->waypoint &&
 		navigation_world_jump_clear(unit_index, origin, target))
 	{
@@ -941,9 +930,11 @@ static enum bot_navigation_result bot_nav_follow(
 		platform_log("bots: bot %d validated short jump to waypoint %lu at (%.2f %.2f %.2f)",
 			agent->bot_number, (unsigned long)agent->waypoint, target.x, target.y, target.z);
 	}
-	command->has_move = TRUE;
-	command->yaw = arctangent(target.y - origin.y, target.x - origin.x);
-	command->speed = MIN(speed, distance * 2.f);
+	/* Map normalized planar route control into CE's world-yaw intent. This
+	is input, not velocity; CE remains responsible for acceleration/physics. */
+	command->has_move = bot_movement_direction(origin, target, &direction);
+	command->yaw = arctangent(direction.y, direction.x);
+	command->speed = PIN(speed, 0.f, 1.f);
 	return BOT_NAVIGATION_MOVING;
 }
 

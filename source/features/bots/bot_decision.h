@@ -1,6 +1,5 @@
-/* Bot scoring policy, independent of engine objects and action execution.
- * The engine supplies an observed snapshot; policy returns utility outputs.
- * This is CE policy, not Infinite's unrecovered Lua or tag tuning. */
+/* Recovered goal-output mapping and native root evaluators.
+ * Goal values are supplied separately by temporary bot_goal_policy_ce.c. */
 #ifndef HALO_BOT_DECISION_H
 #define HALO_BOT_DECISION_H
 
@@ -49,18 +48,20 @@ enum bot_target_source
     _bot_target_shared
 };
 
+/* Goal utility output numbering from DecisionLoop.cpp section 4. Output 4
+ * exists in the script table but is NOT the native fight evaluator. */
+enum bot_goal_output
+{
+    BOT_GOAL_TRAVERSAL = 0, BOT_GOAL_WEAPON, BOT_GOAL_PICKUP, BOT_GOAL_DELIVER,
+    BOT_GOAL_UNUSED_FIGHT, BOT_GOAL_GUARD, BOT_GOAL_EQUIPMENT, BOT_GOAL_INTERACT,
+    BOT_GOAL_HIDE, BOT_GOAL_PASSENGER_ENTER, BOT_GOAL_HUNT, BOT_GOAL_CONTEST,
+    BOT_GOAL_PASSENGER_RIDE, BOT_GOAL_DRIVER_ENTER, BOT_GOAL_OUTPUT_COUNT
+};
+
 struct bot_utility_tuning
 {
     float vehicle;
     float roam;
-    float fight_seen;
-    float fight_attacker;
-    float fight_remembered;
-    float fight_shared_cap;
-    engine_ai_utility_curve fight_distance;
-    engine_ai_utility_curve fight_confidence;
-    engine_ai_utility_curve retreat_shields;
-    float retreat_cap;
     float scavenge_weapon;
     float scavenge_powerup;
     float scavenge_vehicle;
@@ -83,6 +84,8 @@ struct bot_decision_inputs
     bool seated;
     bool navigation_only;
     bool danger; /* observed, expiring hazard; never a hidden enemy query */
+    bool fight_disabled;
+    bool playfighting;
     bool objective_valid;
     enum bot_ambition_kind objective_kind;
     float objective_value;
@@ -102,7 +105,24 @@ struct bot_decision_inputs
 /* Existing CE defaults. Returned storage is immutable and process-lifetime. */
 struct bot_utility_tuning const *bot_decision_default_tuning(void);
 
-/* Overwrites all BOT_BEHAVIOR_COUNT outputs, 0 for unavailable behaviors.
+/* Recovered native fight utility is 0.5, 2 in playfighting, -2 excluded.
+ * Goal outputs are not clamped or used as a substitute fight evaluator. */
+void bot_decision_evaluate(struct bot_decision_inputs const *inputs,
+    float const outputs[BOT_GOAL_OUTPUT_COUNT], float scores[BOT_BEHAVIOR_COUNT]);
+
+/* Select behaviors before claiming their ambitions. The gate is invoked in
+ * descending utility order; a rejected candidate must not mutate ownership.
+ * Choice time changes only when the winning identity changes. CE scheduling
+ * uses config.decision_interval; switch_margin is not used by this selector.
+ * The damaged native fallback-loop ordering is not copied as a last-wins bug. */
+typedef bool (*bot_decision_gate)(void *context, uint32_t leaf);
+engine_ai_utility_decision bot_decision_select(engine_ai_utility_selector *selector,
+    engine_ai_utility_selector_config const *config, float const *scores,
+    uint64_t tick, bool force, bot_decision_gate gate, void *context, uint32_t *chosen);
+
+/* Compatibility entry: explicitly temporary CE goal supplier then evaluate.
+ * Production can supply recovered script outputs directly through evaluate.
+ * Overwrites all BOT_BEHAVIOR_COUNT outputs, 0 for unavailable behaviors.
  * No allocation, engine access, random draws, claims, or selector mutation.
  * Inputs/tuning/outputs must be non-null and must not overlap. */
 void bot_decision_score(struct bot_utility_tuning const *tuning,

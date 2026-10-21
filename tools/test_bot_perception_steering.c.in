@@ -34,7 +34,7 @@ enum { _unit_active_camouflaged_bit, _unit_super_camouflaged_bit };
 enum { _object_type_biped, _object_type_vehicle };
 enum { _collision_test_for_line_of_sight_flags, _collision_test_for_bipeds_living_flags };
 enum { _bot_target_none, _bot_target_seen, _bot_target_attacker, _bot_target_remembered, _bot_target_shared };
-enum { _bot_leaf_fight, _bot_leaf_retreat, _bot_leaf_roam };
+enum { _bot_leaf_fight, _bot_leaf_retreat, _bot_leaf_roam, _bot_leaf_avoid };
 struct unit_attacker { long player_index,game_time_stamp; };
 struct unit_datum {
     struct { long parent_object_index; short type; } object;
@@ -215,7 +215,7 @@ static void danger_adapter_tests(void) {
     struct bot b=fresh();hazard_visible=TRUE;b.aware_time=200;
     bot_update_danger(&b);
     assert(hazard_scans==1 && b.danger_until==115 && b.decide_now && b.aware_time==100);
-    assert(b.danger.escape_yaw==1.f && b.target_player_index==NONE && !b.target_visible);
+    assert(isnan(b.danger.escape_yaw) && b.target_player_index==NONE && !b.target_visible);
     hazard_visible=FALSE;now=101;bot_update_danger(&b);assert(hazard_scans==1 && b.danger_until==115);
     now=104;bot_update_danger(&b);assert(hazard_scans==2 && b.danger_until==115);
     now=116;bot_update_danger(&b);assert(b.danger_until<now);

@@ -73,6 +73,8 @@ struct bot_skill
     float hysteresis_seconds;
     float switch_margin;
     struct bot_combat_profile combat;
+    float route_reach_distance_squared; /* recovered active-profile +0x2c role; CE value */
+    float avoid_lead_ticks; /* +0xc4 prediction role, converted to CE per-tick velocity */
 };
 
 enum
