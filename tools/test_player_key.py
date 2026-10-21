@@ -41,7 +41,9 @@ def private_key_source(android):
     browser = (ROOT / "port/linux/src/posix_browser.c").read_text()
     # (the POSIX one, after #else, and its mode test before it)
     posix = browser[browser.index("#else", browser.index("posix_browser_private_key")):]
-    macro = re.search(r"#ifdef __ANDROID__\n#define PRIVATE_KEY_PRIVATE.*?#endif\n", posix, re.S).group(0)
+    macro_match = re.search(r"#ifdef __ANDROID__\n#define PRIVATE_KEY_PRIVATE.*?#endif\n", posix, re.S)
+    assert macro_match is not None
+    macro = macro_match.group(0)
     return ("#define _GNU_SOURCE\n" + ("#define __ANDROID__ 1\n" if android else "") + r'''
 #include <errno.h>
 #include <fcntl.h>
@@ -54,7 +56,9 @@ static int crypto_ready = 1;
 static void posix_browser_lock(void) {}
 static void posix_browser_unlock(void) {}
 static void set_up(void) {}
+#ifndef __ANDROID__
 static void platform_log(const char *format, ...) { (void)format; }
+#endif
 static int psa_generate_random(unsigned char *key, size_t size)
 {
 	memset(key, 0x5a, size);
@@ -75,6 +79,7 @@ def build(tmp_path, name, source):
     cc = compiler()
     if not cc:
         pytest.skip("no C compiler")
+    assert cc is not None
     (tmp_path / (name + ".c")).write_text(source)
     binary = tmp_path / name
     result = subprocess.run([cc, "-std=c11", "-Wall", "-Werror", "-o", str(binary), str(tmp_path / (name + ".c"))],
@@ -95,13 +100,13 @@ def test_player_key_made_then_read(tmp_path, android):
 
 @pytest.mark.parametrize("android", [False, True])
 def test_player_key_readable_by_others(tmp_path, android):
-    """A key others may read (0664, as Android's launcher made it) is read
-    on Android, where the app's storage is its own, and refused elsewhere."""
+    """Android accepts the launcher's 0664 key; POSIX makes it private first."""
     binary = build(tmp_path, "key", private_key_source(android))
     key = tmp_path / "game_list_player.key"
     key.write_bytes(bytes(KEY_SIZE))
     key.chmod(0o664)
-    assert (subprocess.run([str(binary), str(key)]).returncode == 0) == android
+    assert subprocess.run([str(binary), str(key)]).returncode == 0
+    assert key.stat().st_mode & 0o777 == (0o664 if android else 0o600)
 
 
 @pytest.mark.parametrize("android", [False, True])
@@ -146,6 +151,8 @@ def test_failed_key_load_is_tried_again():
     """A player key that could not be read is not given up on for the run
     (browser.c, player_key): only a loaded key is kept."""
     browser = (ROOT / "port/linux/src/browser.c").read_text()
-    body = re.search(r"^static int player_key\(.*?^\}", browser, re.M | re.S).group(0)
+    body_match = re.search(r"^static int player_key\(.*?^\}", browser, re.M | re.S)
+    assert body_match is not None
+    body = body_match.group(0)
     assert re.search(r"else if \(loaded > 0\)\s*\{[^}]*player_key_loaded = loaded;", body)
     assert body.count("player_key_loaded = ") == 1
