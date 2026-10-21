@@ -674,7 +674,7 @@ static void screen_scale_dense(float scale[2])
 }
 
 /* the Xbox-sized offscreen targets drawn larger than the Xbox drew them:
-the 128x128 R5G6B5 shadow maps (and their blur) at display.shadow_map_size,
+the 128x128 R5G6B5 shadow maps (and their blur) at display.shadow_resolution's,
 and with display.effect_resolution the 320x240 active-camouflage source (and
 its depth) at the screen's scale. Their users address them in normalized or
 logical coordinates, so only the pixel count changes. */
@@ -2878,23 +2878,39 @@ static unsigned long stage_texture_mode(int stage)
 	return (D3D__RenderState[D3DRS_PSTEXTUREMODES] >> (5 * stage)) & 0x1f;
 }
 
+/* display.anisotropic_filtering: the anisotropy forced on the filtered
+textures that have mip levels (1: none, as the game asks), as the OpenGL
+renderer does (port/linux/src/d3d8_gl.c): 0 and 1 are off, any other value
+goes down to 2, 4, 8 or 16 (all that Metal samplers do). Read again whenever
+the settings change, so the Settings screen's row applies at once. */
+static uint32_t forced_anisotropy(void)
+{
+	static unsigned long read_at = (unsigned long)-1;
+	static uint32_t level = 1;
+
+	if (read_at != config_changes())
+	{
+		long value = config_integer("display.anisotropic_filtering");
+
+		read_at = config_changes();
+		level = value >= 16 ? 16 : value >= 8 ? 8 : value >= 4 ? 4 : value >= 2 ? 2 : 1;
+	}
+	return level;
+}
+
 /* the sampler state of a stage; without mipmaps the mip filter is none */
 /* hires: a high-res HUD texture (hud_hires.h), drawn smaller than it is, so
 filtered and from its mip levels whatever the game asks: the HUD's meters are
-point sampled for one player, to keep the Xbox bitmaps' texels sharp */
+point sampled for one player, to keep the Xbox bitmaps' texels sharp. It is
+drawn facing the screen, where anisotropy changes nothing: it has none, so
+the HUD looks the same with or without the setting, as on OpenGL */
 static void sampler_state_fill(int stage, BOOL mipmapped, BOOL hires, struct gpu_sampler_state *sampler)
 {
 	assert(stage >= 0);
 	assert(stage < D3DTSS_MAXSTAGES);
 	assert(sampler != NULL);
-	static long anisotropy = -1;
-	if (anisotropy < 0)
-	{
-		anisotropy = config_integer("display.anisotropic_filtering");
-		anisotropy = anisotropy < 1 ? 1 : anisotropy > 16 ? 16 : anisotropy;
-	}
 	xbox_state_sampler(&prepared_state, &draw_profile, (unsigned)stage,
-		D3D__TextureState[stage], mipmapped, hires, (uint32_t)anisotropy, sampler);
+		D3D__TextureState[stage], mipmapped, hires, hires ? 1 : forced_anisotropy(), sampler);
 }
 
 /* ---------- render targets sampled with their mip chain

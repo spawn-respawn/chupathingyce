@@ -85,7 +85,7 @@ const unsigned int *const ui_prompt_icons[10] = {
     &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel,
     &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel, &icon_pixel
 };
-int platform_input_scheme(void) { return input_scheme; }
+int platform_prompt_scheme(void) { return input_scheme; }
 unsigned long config_changes(void) { return 0; }
 void platform_log(const char *format, ...) { (void)format; }
 int text_hires_font_file(int large, char *path, unsigned long size) { (void)large; (void)size; path[0] = 0; return 0; }

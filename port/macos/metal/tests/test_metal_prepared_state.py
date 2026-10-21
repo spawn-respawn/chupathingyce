@@ -52,18 +52,17 @@ static void sampler_state_fill(int stage, BOOL mipmapped, BOOL hires, struct gpu
 	sampler->lod_bias = hires ? 0.0f : dword_to_float(state[D3DTSS_MIPMAPLODBIAS]);
 	sampler->border_color = (uint32_t)state[D3DTSS_BORDERCOLOR];
 	/* display.anisotropic_filtering: the game never asks for anisotropic
-	filtering (the Xbox ran 1x), so every linear, mipmapped stage gets it.
-	Point-sampled and unmipmapped stages (the HUD, text, render targets)
-	stay as they are. */
+	filtering (the Xbox ran 1x), so every linear, mipmapped stage gets it,
+	rounded down to 2, 4, 8 or 16 (0 and 1: none), as the OpenGL renderer
+	does. Point-sampled and unmipmapped stages (text, render targets) stay
+	as they are, and so does the high-res HUD. Read at every call here: the
+	live code reads it again when the settings change. */
 	{
-		static long anisotropy = -1;
+		long value = config_integer("display.anisotropic_filtering");
+		long anisotropy = value >= 16 ? 16 : value >= 8 ? 8 : value >= 4 ? 4 : value >= 2 ? 2 : 1;
 
-		if (anisotropy < 0)
-		{
-			anisotropy = config_integer("display.anisotropic_filtering");
-			anisotropy = anisotropy < 1 ? 1 : anisotropy > 16 ? 16 : anisotropy;
-		}
-		if (anisotropy > 1 && sampler->min_filter == GPU_FILTER_LINEAR && sampler->mip_filter != GPU_FILTER_NONE)
+		if (!hires && anisotropy > 1 && sampler->min_filter == GPU_FILTER_LINEAR &&
+			sampler->mip_filter != GPU_FILTER_NONE)
 		{
 			sampler->min_filter = GPU_FILTER_ANISOTROPIC;
 			sampler->max_anisotropy = (uint32_t)anisotropy;
@@ -155,7 +154,10 @@ static struct { int vertex_bgra, occlusion_mode; } device_capabilities;
 static struct { int visibility_test_active; } device;
 static struct draw_profile draw_profile;
 static float dword_to_float(DWORD bits) { float f; memcpy(&f, &bits, 4); return f; }
-static long config_integer(const char *name) { (void)name; return 4; }
+static long anisotropy_setting = 4;
+static unsigned long config_generation;
+static long config_integer(const char *name) { (void)name; return anisotropy_setting; }
+static unsigned long config_changes(void) { return config_generation; }
 /* KEY_TYPE */
 static unsigned lookups;
 static int fail_shader;
@@ -292,6 +294,46 @@ static void compare_sampler(int stage, BOOL mips, BOOL hires)
     assert(!memcmp(&actual, &expected, sizeof(actual)));
     compare_key();
 }
+/* display.anisotropic_filtering as the Settings screen changes it: read again
+   when the settings change, rounded down to 2, 4, 8 or 16 (0 and 1: none), and
+   only for filtered textures with mip levels: not the high-res HUD, not an
+   unmipmapped stage, not a point-sampled one. The frozen reference reads the
+   setting at every call, so each case is also a differential check. */
+static void test_forced_anisotropy(void)
+{
+    static const struct { long setting; uint32_t level; } cases[] = {
+        {-5, 1}, {0, 1}, {1, 1}, {2, 2}, {3, 2}, {4, 4}, {7, 4}, {8, 8}, {15, 8}, {16, 16}, {17, 16}, {1000, 16},
+        {16, 16}, {0, 1}, {4, 4}
+    };
+    struct gpu_sampler_state sampler;
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        anisotropy_setting = cases[i].setting;
+        config_generation++;
+        for (int stage = 0; stage < 4; stage++) {
+            D3D__TextureState[stage][D3DTSS_MINFILTER] = D3DTEXF_LINEAR;
+            D3D__TextureState[stage][D3DTSS_MIPFILTER] = D3DTEXF_LINEAR;
+            sampler_state_fill(stage, 1, 0, &sampler);
+            if (cases[i].level > 1)
+                assert(sampler.min_filter == GPU_FILTER_ANISOTROPIC && sampler.max_anisotropy == cases[i].level);
+            else
+                assert(sampler.min_filter == GPU_FILTER_LINEAR);
+            sampler_state_fill(stage, 0, 0, &sampler);
+            assert(sampler.min_filter != GPU_FILTER_ANISOTROPIC);
+            sampler_state_fill(stage, 1, 1, &sampler);
+            assert(sampler.min_filter == GPU_FILTER_LINEAR);
+            for (int mips = 0; mips < 2; mips++) for (int hires = 0; hires < 2; hires++)
+                compare_sampler(stage, mips, hires);
+            D3D__TextureState[stage][D3DTSS_MINFILTER] = D3DTEXF_POINT;
+            sampler_state_fill(stage, 1, 0, &sampler);
+            assert(sampler.min_filter != GPU_FILTER_ANISOTROPIC);
+            compare_sampler(stage, 1, 0);
+            D3D__TextureState[stage][D3DTSS_MINFILTER] = 0;
+            D3D__TextureState[stage][D3DTSS_MIPFILTER] = 0;
+        }
+    }
+    anisotropy_setting = 4;
+    config_generation++;
+}
 int main(void)
 {
     draw_profile.enabled = 1;
@@ -405,6 +447,7 @@ int main(void)
     }
     test_reset_and_ownership();
     test_sampler_policy();
+    test_forced_anisotropy();
 
     struct vertex_shader_object declaration = {0}, other = {0};
     declaration.element_count = 3;
@@ -570,7 +613,8 @@ class PreparedStateTests(unittest.TestCase):
         conversions = shared + FROZEN
         converters = Path(__file__).with_name("state_reference.h").read_text()
         shared_bodies = converters + "\n" + "\n".join(function(source, name) for name in shared[6:])
-        bodies = "\n".join(function(source, name) for name in shared[6:] + live)
+        helpers = ["forced_anisotropy"]
+        bodies = "\n".join(function(source, name) for name in helpers + shared[6:] + live)
         extras = "\n".join(function(source, name) for name in ["prepared_fragment_shader", "declaration_plan"])
         module = read("xbox_state.c")
         tokens = sorted(set(re.findall(r"\bD3D[A-Z][A-Za-z0-9_]*\b", bodies + extras + module + REFERENCE))
