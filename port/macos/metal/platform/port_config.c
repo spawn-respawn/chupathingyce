@@ -65,6 +65,7 @@ enum
 	_platform_all = _platform_desktop | _platform_android,
 	/* (of the desktop builds, only Windows) */
 	_platform_windows = 4,
+	_platform_xbox = 8,
 };
 
 struct config_setting
@@ -240,7 +241,7 @@ static const struct config_setting config_settings[] =
 		"In first person, point the view where the player aims now instead of\n"
 		"where the last tick left it: the view turns the frame the mouse moves,\n"
 		"not up to two ticks (66 ms) later." },
-	{ "display.field_of_view", _config_real, "70.0", "HALO_FIELD_OF_VIEW", _environment_value, _platform_all,
+	{ "display.field_of_view", _config_real, "70.0", "HALO_FIELD_OF_VIEW", _environment_value, _platform_all | _platform_xbox,
 		"How wide the first-person view is, in degrees across a 4:3 picture:\n"
 		"70 as on the Xbox, 50 to 120 (wider screens see more at the sides).\n"
 		"Scopes zoom in as much as before." },
@@ -2362,6 +2363,24 @@ static const struct config_value *config_value(const char *name, enum config_typ
 		return &none;
 	}
 	return &config_values[index];
+}
+
+/* sets a setting for this run only, from its value as text: config.toml is
+not changed (port/linux/src/port_config.c) */
+int config_set(const char *name, const char *value)
+{
+	long index = config_setting_index(name);
+
+	if (index < 0)
+		return 0;
+	/* (the file read first, so that it does not overwrite this) */
+	config_value(name, config_settings[index].type);
+	pthread_mutex_lock(&config_lock);
+	config_set_from_text(&config_values[index], config_settings[index].type, value);
+	config_given[index] = 1;
+	config_change_count++;
+	pthread_mutex_unlock(&config_lock);
+	return 1;
 }
 
 /* ---------- writing a setting */

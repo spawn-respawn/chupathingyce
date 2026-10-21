@@ -103,6 +103,7 @@
       "delta_compat.c",
       "delta_profile.c",
       "delta_chat.c",
+      "delta_chat_bridge.c",
       "delta_chat_words.c",
       "delta_maps.c",
       "delta_peer.c",
