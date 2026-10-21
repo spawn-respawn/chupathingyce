@@ -86,6 +86,9 @@ symbols in this file:
 #include "game/players.h"
 #include "interface/hud.h"
 #include "interface/hud_definitions.h"
+#ifdef HALO_CUSTOM_EDITION
+#include "interface/hud_draw.h" /* port: hud_bitmap_group_scale */
+#endif
 #include "interface/hud_messaging.h"
 #include "interface/hud_unit.h"
 #include "interface/hud_weapon.h"
@@ -953,7 +956,12 @@ static void hud_draw_friendly_indicator(
 				bitmap,
 				&position,
 				&clip,
+#ifdef HALO_CUSTOM_EDITION
+				/* port: at its bitmap's HUD scale */
+				hud_bitmap_group_scale(interface_get_tag_index(_interface_bitmap_multiplayer_hud)),
+#else
 				1.0f,
+#endif
 				0.0f,
 				1.0f);
 		}
@@ -1001,6 +1009,7 @@ static void hud_draw_players(
 	return;
 }
 
+#ifndef HALO_CONSOLE_NO_PLAYER_NAMES
 /* port: in multiplayer and network co-op, players' names above their heads
 (display.player_names: "all", "allies", "enemies" or "none"). An ally's goes
 above the triangle the game draws over teammates; an enemy's only within the
@@ -1149,7 +1158,15 @@ static void hud_draw_player_name(
 			interface_get_tag_index(_interface_bitmap_multiplayer_hud), 0, 0);
 
 		if (bitmap)
+		{
+#ifdef HALO_CUSTOM_EDITION
+			/* (the triangle drawn at its bitmap's HUD scale) */
+			y -= (short)(bitmap->registration_point.y *
+				hud_bitmap_group_scale(interface_get_tag_index(_interface_bitmap_multiplayer_hud)));
+#else
 			y -= bitmap->registration_point.y;
+#endif
+		}
 	}
 	y -= 2;
 	font = font_definition_get(font_index);
@@ -1221,6 +1238,8 @@ static void hud_draw_player_names(
 
 	return;
 }
+
+#endif /* HALO_CONSOLE_NO_PLAYER_NAMES */
 
 static void temporary_hud_draw(
 	void)
@@ -1378,8 +1397,10 @@ void hud_draw_screen(
 		}
 
 		/* port: players' names above their heads, in multiplayer and network co-op */
+#ifndef HALO_CONSOLE_NO_PLAYER_NAMES
 		if ((game_engine_running() || network_coop_active()) && !cinematic_in_progress())
 			hud_draw_player_names();
+#endif
 		/* port: who a dead network co-op player is watching */
 		if (player->unit_index == NONE && coop_spectating() && !cinematic_in_progress())
 			coop_spectate_draw(render.local_player_index);

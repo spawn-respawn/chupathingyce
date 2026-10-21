@@ -19,6 +19,7 @@ HALO_GAME_BROWSER; network.protocol = "opence" turns all of it off.
 #include "port_config.h"
 #include "halo_port_limits.h"
 #include "delta.h"
+#include "delta_compat.h"
 #include "delta_peer.h"
 #include "delta_maps.h"
 #include "halo_map_families.h"
@@ -488,7 +489,7 @@ static void client_map(void)
 			(unsigned long)((((unsigned long long)mine.size_high << 32) | mine.size_low) >> 20),
 			(unsigned long)((((unsigned long long)theirs.size_high << 32) | theirs.size_low) >> 20));
 		snprintf(message, sizeof(message),
-			"Your %s map %.63s.map is not the host's: the two files differ. Replace the one in %s with the host's.",
+			"Your %s map %.63s.map differs from the host's. Replace the one in %s with the host's.",
 			map_family_badge(theirs.family), theirs.name, map_family_folder(theirs.family));
 		for (index = 0; message[index] && index < (int)(sizeof(text) / sizeof(text[0])) - 1; index++)
 			text[index] = (unsigned short)(unsigned char)message[index];
@@ -605,43 +606,39 @@ typedef char delta_advertised_wire_fits[sizeof(DELTA_WIRE) - 1 <= DELTA_ADVERTIS
 
 void delta_peer_advertised_wire(unsigned char *reserved, int size)
 {
-	if (size < DELTA_ADVERTISED_WIRE_OFFSET + 1 + DELTA_ADVERTISED_WIRE_SIZE)
+	if (size < DELTA_ADVERTISED_RANGE_OFFSET + DELTA_ADVERTISED_RANGE_SIZE)
 		return;
-	memset(reserved + DELTA_ADVERTISED_WIRE_OFFSET, 0, 1 + DELTA_ADVERTISED_WIRE_SIZE);
+	memset(reserved + DELTA_ADVERTISED_WIRE_OFFSET, 0,
+		1 + DELTA_ADVERTISED_WIRE_SIZE + DELTA_ADVERTISED_RANGE_SIZE);
 	if (!delta_peer_advertised_flags())
 		return;
-	reserved[DELTA_ADVERTISED_WIRE_OFFSET] = DELTA_MAJOR;
-	memcpy(reserved + DELTA_ADVERTISED_WIRE_OFFSET + 1, DELTA_WIRE, sizeof(DELTA_WIRE) - 1);
+	/* (the old slot: the oldest compatible wire; then the range bytes) */
+	delta_compat_advertise(reserved, size, DELTA_MAJOR, DELTA_WIRE);
 }
 
 int delta_peer_advertised_wire_matches(const unsigned char *reserved, int size, char *theirs, int theirs_size)
 {
-	const unsigned char *wire = reserved + DELTA_ADVERTISED_WIRE_OFFSET + 1;
-	int length = 0;
-	int index;
-
 	if (theirs_size > 0)
 		theirs[0] = 0;
-	if (size < DELTA_ADVERTISED_WIRE_OFFSET + 1 + DELTA_ADVERTISED_WIRE_SIZE ||
-		delta_peer_protocol() == _delta_peer_protocol_opence ||
-		!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & DELTA_ADVERTISED_FLAG) ||
-		reserved[DELTA_ADVERTISED_WIRE_OFFSET] != DELTA_MAJOR)
+	if (delta_peer_protocol() == _delta_peer_protocol_opence || size <= HALO_PORT_ADVERTISED_FLAGS_OFFSET ||
+		!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & DELTA_ADVERTISED_FLAG))
 	{
 		return -1;
 	}
-	while (length < DELTA_ADVERTISED_WIRE_SIZE && wire[length])
-		length++;
-	/* (none: a host of this major from before the wire was advertised) */
-	if (!length)
-		return -1;
-	if (length == (int)sizeof(DELTA_WIRE) - 1 && !memcmp(wire, DELTA_WIRE, (size_t)length))
-		return 1;
-	/* (printable ASCII alone, for the player's message and the log) */
-	for (index = 0; index < length && index < theirs_size - 1; index++)
-		theirs[index] = wire[index] >= 0x20 && wire[index] < 0x7F ? (char)wire[index] : '?';
-	if (theirs_size > 0)
-		theirs[index] = 0;
-	return 0;
+	return delta_compat_decide(reserved, size, DELTA_MAJOR, DELTA_WIRE, theirs, theirs_size);
+}
+
+int delta_peer_advertised_host_wire(const unsigned char *reserved, int size)
+{
+	struct delta_wire_id wire;
+
+	if (delta_peer_protocol() == _delta_peer_protocol_opence || size <= HALO_PORT_ADVERTISED_FLAGS_OFFSET ||
+		!(reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] & DELTA_ADVERTISED_FLAG) ||
+		!delta_compat_host_wire(reserved, size, DELTA_MAJOR, &wire))
+	{
+		return 0;
+	}
+	return wire.number;
 }
 
 int delta_peer_host_player_limit(void)
@@ -683,6 +680,15 @@ int delta_peer_player_platform(int player_index)
 	return key.platform < NUMBER_OF_DELTA_PLATFORMS ? key.platform : _delta_platform_unknown;
 }
 
+int delta_peer_game_on_delta(void)
+{
+	if (!delta_game.ready)
+		return 0;
+	if (delta_game.role == _role_host)
+		return delta_peer_advertised_flags() != 0;
+	return delta_game.role == _role_client && delta_game.peer.client_state == _delta_peer_client_delta;
+}
+
 int delta_peer_machine_profile(int machine_index, unsigned char *player_id, delta_u32 *revision)
 {
 	struct delta_peer_machine machine;
@@ -697,6 +703,26 @@ int delta_peer_machine_profile(int machine_index, unsigned char *player_id, delt
 	if (revision)
 		*revision = machine.profile.revision;
 	return 1;
+}
+
+/* the profile a player's machine shares, while that machine has this one
+player alone (a machine's profile is its copy's: split screen players on it
+show by their game names) */
+int delta_peer_player_profile(int player_index, unsigned char *player_id)
+{
+	int machine, index, players = 0;
+
+	if (!delta_game.ready || player_index < 0 || player_index >= DELTA_PEER_MAXIMUM_PLAYERS)
+		return 0;
+	machine = delta_game.peer.player_machines[player_index];
+	if (machine < 0)
+		return 0;
+	for (index = 0; index < DELTA_PEER_MAXIMUM_PLAYERS; index++)
+	{
+		if (delta_game.peer.player_machines[index] == machine)
+			players++;
+	}
+	return players == 1 && delta_peer_machine_profile(machine, player_id, NULL);
 }
 
 int delta_peer_game_room_has(int capability)
@@ -719,7 +745,8 @@ int delta_peer_game_client_state(void)
 /* ---------- Delta List (browser.c) */
 
 static const char *const platform_names[NUMBER_OF_DELTA_PLATFORMS] = {
-	"unknown", "pc_windows", "pc_macos", "pc_linux", "android", "steam_deck", "xbox", "xbox360", "wiiu", "switch"
+	"unknown", "pc_windows", "pc_macos", "pc_linux", "android", "steam_deck", "xbox", "xbox360", "wiiu", "switch",
+	"psp", "vita", "xbox_uwp"
 };
 
 const char *delta_peer_platform_name(int platform)

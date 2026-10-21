@@ -30,6 +30,10 @@ this before any of them is read) */
 
 #include "halo_port_capacity.h"
 
+/* ---------- the desktop extras a console's build leaves out */
+
+#include "halo_port_features.h"
+
 /* ---------- struct network_game layout
 
 The game settings record (struct network_game) is declared separately in
@@ -66,7 +70,7 @@ is newer (network_client_manager.c). A host advertises it, with its netcode,
 in its game's advertisement's reserved bytes (network_server_message_handler.c),
 which hosts built before there was a version send as zeros: version 0.
 Raise it with any change to what the machines send each other. */
-#define HALO_PORT_NETWORK_VERSION 29
+#define HALO_PORT_NETWORK_VERSION 32
 /* ... the versions whose hosts a client joins: its own, and those that differ
 from it only in what the other machines leave out (a message a machine of
 the other version does not know it drops). Which are which is delta.h's
@@ -78,7 +82,7 @@ here, which the command repository reads). A host
 never checks a client's version: the client does (network_client_manager.c),
 so the range is the client's. */
 #define HALO_PORT_NETWORK_VERSION_MINIMUM 11
-#define HALO_PORT_NETWORK_VERSION_MAXIMUM 30
+#define HALO_PORT_NETWORK_VERSION_MAXIMUM 33
 /* ... the numbers in use (port/linux/src/delta.c): the three above, until a
 legacy table (docs/delta.md) widens them; code asks these, not the numbers */
 int delta_legacy_announce(void);
