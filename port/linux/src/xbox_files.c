@@ -1366,7 +1366,7 @@ BOOL WINAPI GetDiskFreeSpaceExA(LPCSTR directory_name, PULARGE_INTEGER free_byte
 	PULARGE_INTEGER total_bytes, PULARGE_INTEGER total_free_bytes)
 {
 	char path[1024];
-	unsigned long free_low, free_high, total_low, total_high;
+	posix_ulong free_low, free_high, total_low, total_high;
 
 	platform_translate_path(directory_name ? directory_name : "d:\\", path, sizeof(path));
 	if (posix_disk_space(path, &free_low, &free_high, &total_low, &total_high) != 0)
