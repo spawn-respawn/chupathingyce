@@ -360,7 +360,7 @@ symbols in this file:
 #endif
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
 
-#ifdef HALO_CUSTOM_EDITION
+#ifdef HALO_MAP_LIST
 #include "halo_ui_map_list.h"
 #endif
 
@@ -476,6 +476,24 @@ enum multiplayer_game_bitmap_frame
 	_multiplayer_game_bitmap_race,
 	_multiplayer_game_bitmap_unknown,
 };
+
+#ifdef HALO_GAME_BROWSER
+/* port: Bomb's game types (game_engine_bomb.c), which the map's pictures and
+descriptions predate: Oddball's skull (the bomb is the map's oddball), and
+the port's own words, by the variant's preset */
+static wchar_t const *bomb_variant_description(
+	struct game_variant const *variant)
+{
+	switch (variant->game_engine_variant.bomb.traits)
+	{
+	case _bomb_traits_grifball:
+		return L"One hit kills.\r\nCarry the bomb into\r\nthe enemy goal to\r\nwin the round.\r\nMelee only.";
+	case _bomb_traits_open_pitch:
+		return L"Grifball for a big\r\nmap. Everyone runs\r\nfast, the carrier\r\nfaster still.\r\nMelee only.";
+	}
+	return L"Carry the bomb into\r\nthe enemy goal and\r\narm it there.\r\nEach goal wins\r\na round.";
+}
+#endif
 
 /* ---------- macros */
 
@@ -1187,6 +1205,12 @@ static void server_list_menu_update(
 					game_type_bitmap->animation.current_frame_index =
 						_multiplayer_game_bitmap_race;
 					break;
+#ifdef HALO_GAME_BROWSER
+				case game_engine_bomb:
+					game_type_bitmap->animation.current_frame_index =
+						_multiplayer_game_bitmap_oddball;
+					break;
+#endif
 				default:
 					game_type_bitmap->animation.current_frame_index =
 						_multiplayer_game_bitmap_unknown;
@@ -2496,7 +2520,7 @@ static void multiplayer_game_set_text_box_for_map_name(
 	if (game)
 	{
 		map_name = game->map.name;
-#ifdef HALO_CUSTOM_EDITION
+#ifdef HALO_MAP_LIST
 	/* port: a map past the Xbox's is named as the menus' map list names it */
 	if (strchr(map_name, '@'))
 	{
@@ -2778,7 +2802,7 @@ static void multiplayer_game_set_bitmap_for_map(
 	if (game)
 	{
 		map_name = game->map.name;
-#ifdef HALO_CUSTOM_EDITION
+#ifdef HALO_MAP_LIST
 	/* port: a map past the Xbox's shows the menus' map list's picture for it */
 	if (strchr(map_name, '@'))
 	{
@@ -2891,6 +2915,12 @@ static void multiplayer_game_set_bitmap_for_ruleset(
 		case game_engine_race:
 			widget->animation.current_frame_index = _multiplayer_game_bitmap_race;
 			break;
+#ifdef HALO_GAME_BROWSER
+		/* port: Bomb's, Oddball's skull (bomb_variant_description) */
+		case game_engine_bomb:
+			widget->animation.current_frame_index = _multiplayer_game_bitmap_oddball;
+			break;
+#endif
 		default:
 			widget->animation.current_frame_index = _multiplayer_game_bitmap_unknown;
 			break;
@@ -3449,6 +3479,22 @@ static void mutliplayer_settings_select_list_update_displayed_items(
 			{
 				long string_index = (profile->flags >> 8) + 10;
 
+#ifdef HALO_GAME_BROWSER
+				/* port: Bomb's built-in game types, past the map's
+				descriptions */
+				if (profile->engine_type == game_engine_bomb)
+				{
+					icon->animation.current_frame_index = _multiplayer_game_bitmap_oddball;
+					if (label_box->parameters.text_box.text)
+					{
+						ustrncpy(label_box->parameters.text_box.text,
+							bomb_variant_description((struct game_variant const *)profile), 0xFF);
+						label_box->parameters.text_box.text[0xFF] = 0;
+					}
+					description_container->visible = TRUE;
+					continue;
+				}
+#endif
 				switch (profile->engine_type)
 				{
 				case game_engine_ctf:
@@ -3589,6 +3635,17 @@ static void mutliplayer_settings_select_list_update_displayed_items(
 					label_box->parameters.text_box.text[0xFF] = 0;
 				}
 				break;
+#ifdef HALO_GAME_BROWSER
+			case game_engine_bomb:
+				icon->animation.current_frame_index = _multiplayer_game_bitmap_oddball;
+				if (label_box->parameters.text_box.text)
+				{
+					ustrncpy(label_box->parameters.text_box.text,
+						bomb_variant_description((struct game_variant const *)profile), 0xFF);
+					label_box->parameters.text_box.text[0xFF] = 0;
+				}
+				break;
+#endif
 			}
 
 			continue;
@@ -4351,7 +4408,7 @@ static void mp_level_select_list_update_displayed_items(
 				_ui_widget_type_text_box,
 			"expected a text box widget for the list item's third child (map description)");
 
-#ifdef HALO_CUSTOM_EDITION
+#ifdef HALO_MAP_LIST
 		/* port: the rows are the menus' map list's: an Xbox map's string and
 		frame are its own, another's text that list's */
 		map_name->parameters.text_box.string_list_index =

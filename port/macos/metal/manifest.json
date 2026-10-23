@@ -91,6 +91,7 @@
   "shared": {
     "comment": "Compiled unchanged into the Metal build (with the Mac include directories first).",
     "files": [
+      "bink_ffmpeg.c",
       "bink_null.c",
       "browser.c",
       "browser_ping.c",
@@ -149,6 +150,7 @@
       "ui_point.c",
       "update_manifest.c",
       "update_signature.c",
+      "thread_stop.c",
       "updater.c",
       "xbdm.c",
       "xbox_files.c",

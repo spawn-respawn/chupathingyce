@@ -16,9 +16,9 @@ server forgets a game it is not told about for a while, so a copy of the
 game that quits without withdrawing drops off by itself.
 
 Browsing: browser_get_games asks for the list when the last one is more
-than LIST_INTERVAL old, and returns what it has meanwhile. Only games of
-this machine's network version are kept (the others could not be joined),
-and never this machine's own.
+than LIST_INTERVAL old, and returns what it has meanwhile. Games of another
+network version than this machine can join are kept too, for the screens to
+mark (browser_game_version_state); never this machine's own.
 
 The requests (posix_browser.c) block, so they are made on a thread of this
 file's, which the first call starts; the game's threads only exchange state
@@ -45,6 +45,9 @@ with it under the lock.
 #include <string.h>
 
 #include <SDL3/SDL_stdinc.h>
+
+/* an Xbox map pack's map's name, pack and tag (port/linux/game/map_packs.c) */
+int map_pack_listing(char const *map, char *title, int title_size, char *pack, int pack_size, char *tag, int tag_size);
 
 enum
 {
@@ -1355,6 +1358,18 @@ static void announce(const char *invite, const struct hosted_game *game)
 	utf8_from_name(game->name, BROWSER_NAME_LENGTH, text, sizeof(text));
 	form_add(form, sizeof(form), "name", text);
 	form_add(form, sizeof(form), "map", game->map);
+	/* (an Xbox map pack's map: its name, its pack's and the pack's tag, for
+	players without the pack: port/linux/game/map_packs.c) */
+	{
+		char title[96], pack[96], tag[16];
+
+		if (map_pack_listing(game->map, title, (int)sizeof(title), pack, (int)sizeof(pack), tag, (int)sizeof(tag)))
+		{
+			form_add(form, sizeof(form), "map_title", title);
+			form_add(form, sizeof(form), "map_pack", pack);
+			form_add(form, sizeof(form), "map_tag", tag);
+		}
+	}
 	snprintf(text, sizeof(text), "%d", game->engine);
 	form_add(form, sizeof(form), "engine", text);
 	snprintf(text, sizeof(text), "%d", game->players);
@@ -1627,15 +1642,16 @@ static void parse_host(char **fields, struct browser_game *game)
 
 /* one line of /v1/games.txt: invite name map engine players
 maximum_players open version age score_limit teams roster, and (as asked:
-?fields=19) region, platform, hosting, protocol, machines, gametype,
-capabilities */
+?fields=22) region, platform, hosting, protocol, machines, gametype,
+capabilities, and an Xbox map pack's map's name, pack and tag (a list from
+before them sends 19) */
 static int parse_game(char *line, struct browser_game *game)
 {
-	char *fields[19];
+	char *fields[22];
 	int count = 0;
 	char *cursor = line;
 
-	while (count < 19)
+	while (count < 22)
 	{
 		fields[count++] = cursor;
 		cursor = strchr(cursor, '\t');
@@ -1698,6 +1714,28 @@ static int parse_game(char *line, struct browser_game *game)
 		fields[18][strcspn(fields[18], "\r\n")] = 0;
 		if (strlen(fields[18]) <= 8 && fields[18][strspn(fields[18], "0123456789abcdefABCDEF")] == 0)
 			game->capabilities = strtoul(fields[18], NULL, 16);
+	}
+	/* (then an Xbox map pack's map's name and its pack's, printable ASCII:
+	the menus draw them as they are) */
+	if (count >= 21)
+	{
+		int field;
+
+		for (field = 19; field <= 20; field++)
+		{
+			char *text = field == 19 ? game->map_title : game->map_pack;
+			size_t size = field == 19 ? sizeof(game->map_title) : sizeof(game->map_pack);
+			size_t index;
+
+			fields[field][strcspn(fields[field], "\r\n")] = 0;
+			for (index = 0; fields[field][index]; index++)
+			{
+				if ((unsigned char)fields[field][index] < 32 || (unsigned char)fields[field][index] > 126)
+					break;
+			}
+			if (!fields[field][index])
+				snprintf(text, size, "%s", fields[field]);
+		}
 	}
 	return 1;
 }
@@ -1777,7 +1815,7 @@ static void update_list(void)
 		return;
 	}
 	/* (with the host's fields: a list from before them sends what it has) */
-	server_url("/v1/games.txt?fields=19", url, sizeof(url));
+	server_url("/v1/games.txt?fields=22", url, sizeof(url));
 	status = posix_browser_request(url, NULL, NULL, response, sizeof(response), error, sizeof(error));
 	if (!p2p_hosting_invite(own, sizeof(own)))
 		own[0] = 0;
@@ -1794,13 +1832,10 @@ static void update_list(void)
 				*next++ = 0;
 			if (!line[0])
 				continue;
-			/* (a game of another OpenCE number too when its host speaks
-			Delta: joining it goes by the game wire its advertisement says,
-			network_game_client_advertised_game_compatible) */
-			if (parse_game(line, &games[count]) &&
-				((games[count].version >= delta_legacy_minimum() && games[count].version <= delta_legacy_maximum()) ||
-				(games[count].protocol == BROWSER_PROTOCOL_DELTA && delta_peer_protocol() != _delta_peer_protocol_opence)) &&
-				strcmp(games[count].invite, own))
+			/* (a game of another number is kept, marked by the screens: a
+			Delta host's may still be joined, by the game wire its
+			advertisement says, network_game_client_advertised_game_compatible) */
+			if (parse_game(line, &games[count]) && strcmp(games[count].invite, own))
 			{
 				count++;
 			}
@@ -2543,6 +2578,12 @@ static void add_known(struct browser_game *games, int count)
 	}
 }
 
+#endif
+
+/* (every build, with the game browser or without: the menus' lobbies ask
+it too, port/linux/game/menu_functions.c) */
+#include <string.h>
+
 /* whether two names are the same, ASCII letters in either case (every
 build has this: the server's and Android's link no SDL string functions) */
 static int browser_ascii_equal(const char *a, const char *b)
@@ -2578,6 +2619,18 @@ int browser_map_is_campaign(const char *map)
 			return 1;
 	}
 	return 0;
+}
+
+#ifdef HALO_GAME_BROWSER
+
+int browser_game_version_state(const struct browser_game *game)
+{
+	/* (a Delta host's other number may still be joined, as above) */
+	if (game->protocol == BROWSER_PROTOCOL_DELTA && delta_peer_protocol() != _delta_peer_protocol_opence)
+		return 0;
+	if (game->version < delta_legacy_minimum())
+		return -1;
+	return game->version > delta_legacy_maximum() ? 1 : 0;
 }
 
 int browser_get_games(struct browser_game *games, int maximum_count)
