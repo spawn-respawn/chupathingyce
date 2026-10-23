@@ -33,6 +33,8 @@ void platform_log(const char *format, ...);
 /* (xinput_sdl.c: the device the player last used: 0 keyboard, 1 Xbox-like,
 2 PlayStation, 3 Nintendo) */
 int platform_prompt_scheme(void);
+/* (interface/progress_bar.c: the loading screen is up) */
+extern unsigned char progress_bar_is_active(void);
 
 /* the controller's button icons (port/assets/prompts, generated with the
 fonts by tools/embed_assets.py --fonts): A, B, X, Y, Start, LT, RT, LB, RB,
@@ -885,7 +887,10 @@ void metal_overlay_prepare(int width, int height, struct metal_overlay_frame *fr
 		overlay.cutout_count = 0;
 		return;
 	}
-	if (width <= 0 || height <= 0 || !set_up())
+	/* (the loading screen is drawn over the menus under it, as the game's
+	picture: the screens and button prompts those menus gathered here, Online
+	Games' and the Chupathingy menus', are not drawn over it) */
+	if (progress_bar_is_active() || !set_up() || width <= 0 || height <= 0)
 	{
 		overlay.quad_count = overlay.text_count = overlay.text_used = 0;
 		overlay.cutout_count = 0;
