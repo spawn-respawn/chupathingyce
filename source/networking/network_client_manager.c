@@ -831,6 +831,20 @@ unsigned int network_game_client_host_network_version(
 	return network_game_client_joined_version;
 }
 
+/* port: what the host showed of its version where it was not known (a game
+joined by an invitation): the version it is at least, which its rules then
+follow (a record of 35's layout, network_client_message_handler.c); a known
+version stays as it was advertised */
+void network_game_client_note_host_network_version(
+	unsigned int version)
+{
+	if (network_game_client_joined_version == 0xFFFF)
+	{
+		network_event("the host's network version is at least %u, by its game settings", version);
+		network_game_client_joined_version = version;
+	}
+}
+
 
 #if defined(HALO_GAME_BROWSER) || defined(HALO_CONSOLE_DELTA)
 /* port/linux/src/delta_peer_game.c's */
@@ -3442,6 +3456,32 @@ boolean network_game_client_set_team(
 }
 
 
+/* ... and a split screen's players on alternate teams (the network test's
+split screen team games: port/linux/game/network_test.c) */
+boolean network_game_client_split_teams(
+	void)
+{
+	struct network_game_client *client = global_network_game_client_get();
+	boolean success = FALSE;
+	char team_index = 0;
+	short player_index;
+
+	if (!client || client->state != _network_game_client_state_pregame)
+		return FALSE;
+	for (player_index = 0; player_index < MAXIMUM_NUMBER_OF_PLAYERS; player_index++)
+	{
+		struct network_player player = client->game.players[player_index];
+
+		if (network_player_is_valid(&player) && player.machine_index == (char)client->machine_index)
+		{
+			player.team_index = team_index;
+			team_index = (char)(1 - team_index);
+			success |= network_game_client_update_local_player_data(client, &player);
+		}
+	}
+	return success;
+}
+
 #if defined(HALO_GAME_BROWSER) || defined(HALO_CONSOLE_ONLINE_GAMES)
 /* the game list's game whose invite this machine joined (the Online Games
 screen, port/linux/game/browser_screen.c): joined once its host's game is
@@ -3662,7 +3702,7 @@ static void network_game_client_delta_frame(
 		csmemset(&reliable, 0, sizeof(reliable));
 		csmemset(&unreliable, 0, sizeof(unreliable));
 		network_connection_get_address(client->connection, &reliable, &unreliable);
-		host = (delta_u32)SWAP4(reliable.address.ipv4_address);
+		host = (delta_u32)NETWORK_SWAP4(reliable.address.ipv4_address);
 	}
 	for (index = 0; index < DELTA_PEER_MAXIMUM_PLAYERS; index++)
 	{

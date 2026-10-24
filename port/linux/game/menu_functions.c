@@ -94,6 +94,7 @@ their handlers open opens.
 #include "networking/network_connection.h"
 #ifdef HALO_GAME_BROWSER
 #include "../src/browser.h"
+#include "halo_port_limits.h"
 #endif
 /* (its games on Halo PC maps: server_browser.c) */
 #include "halo_map_families.h"
@@ -2505,7 +2506,10 @@ static struct
 	short action;
 	short button;
 	unsigned long capture_time;
-} controller_screen = { 0, 0, 0, { 0 }, -1, "", _capture_none, 0, NONE, 0 };
+	/* the layout was made Custom by a swap, not by the spinner, which is
+	then turned to it (controller_update) */
+	boolean spinner_follows;
+} controller_screen = { 0, 0, 0, { 0 }, -1, "", _capture_none, 0, NONE, 0, FALSE };
 
 /* the player's layouts and controller, as they are now */
 static void controller_read(void)
@@ -2635,6 +2639,7 @@ static void controller_capture_apply(void)
 		controller_screen.joystick_preset);
 	player_ui_custom_layout_changed();
 	controller_read();
+	controller_screen.spinner_follows = TRUE;
 }
 
 /* each frame (ui_widget.c's process_ui_widgets): while a button is asked for,
@@ -2711,6 +2716,14 @@ static void controller_update(struct widget_instance *list)
 	wchar_t text[HELP_TEXT_LENGTH];
 
 	controller_read();
+	/* (a swap made the layout Custom: the spinner shows it, else the next
+	frame would put the layout the spinner still showed back in force) */
+	if (spinner && controller_screen.spinner_follows)
+	{
+		if (controller_screen.button_preset < spinner->parameters.list.number_of_items)
+			spinner->parameters.list.selected_index = controller_screen.button_preset;
+		controller_screen.spinner_follows = FALSE;
+	}
 	if (spinner && controller_screen.capture == _capture_none &&
 		spinner->parameters.list.selected_index != controller_screen.button_preset)
 	{
@@ -2811,6 +2824,13 @@ static char const *controls_page_view(struct widget_instance *list)
 {
 	if (spinner_shown(list, "device_spinner") == _controls_device_keyboard_mouse)
 		return spinner_shown(list, "group_spinner") == CONTROL_GROUP_MOUSE ? "mouse" : "keyboard";
+#ifdef HALO_SWITCH_CONSOLE
+	/* port: the controller's third page, the gyroscope's settings (the
+	Switch's rows: tools/switch_menus.py in its port) */
+	if (spinner_shown(list, "page_spinner") == 2)
+		return "gyro";
+#endif
+#line 2814
 	return spinner_shown(list, "page_spinner") == 1 ? "buttons" : "gamepad";
 }
 
@@ -2885,7 +2905,13 @@ static void controls_page_update(struct widget_instance *list)
 	else if (focused == named(list, "op_group", 0))
 		line = "Choose a group of keys, or the mouse.";
 	else if (focused == named(list, "op_page", 0))
+#ifdef HALO_SWITCH_CONSOLE
+		line = "Choose the controller's settings, buttons or gyro.";
+#else
+#line 2888
 		line = "Choose the controller's settings or buttons.";
+#endif
+#line 2889
 	/* (a line with a button in it is one line: the button drawn as the
 	device used last names it) */
 	else if (control_row(focused) || controls_screen.capturing_control != NONE)
@@ -2937,6 +2963,10 @@ static boolean controls_page_defaults(struct widget_instance *widget)
 		return TRUE;
 	}
 	settings_each_in_view(list, "gamepad", setting_default_show);
+#ifdef HALO_SWITCH_CONSOLE
+	settings_each_in_view(list, "gyro", setting_default_show);
+#endif
+#line 2940
 #ifndef HALO_CONSOLE_NO_CONTROLS
 	controller_screen_defaults(list);
 #endif
@@ -3092,8 +3122,28 @@ void platform_text_field(int typing);
 int config_boolean(char const *name);
 void ui_widget_port_post_button(short controller_index, short button_index);
 
-static wchar_t const *const engine_names[] = { L"", L"CTF", L"SLAYER", L"ODDBALL", L"KING OF THE HILL", L"RACE" };
+/* (and Bomb, game_engine_bomb.c: a game of ChupathingyCE machines alone) */
+static wchar_t const *const engine_names[] = { L"", L"CTF", L"SLAYER", L"ODDBALL", L"KING OF THE HILL", L"RACE", L"BOMB" };
+#define ENGINE_NAME(engine) engine_names[PIN(engine, 0, (long)NUMBEROF(engine_names) - 1)]
 static short const maximum_players[] = { 2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128 };
+#ifdef HALO_SWITCH_CONSOLE
+/* port: the most players a game hosted here may have: 48, which the console
+was measured to hold (a LAN game of 48 machines, its socket budget and its
+frames: port/switch/host/host_main.c, host_net.c); the count of the choices
+of the most players is those up to it */
+#define HOSTED_PLAYERS_LIMIT 48
+static short maximum_players_choices(void)
+{
+	short count = 0;
+
+	while (count < NUMBEROF(maximum_players) && maximum_players[count] <= HOSTED_PLAYERS_LIMIT)
+		count++;
+	return count;
+}
+#else
+#define maximum_players_choices() NUMBEROF(maximum_players)
+#endif
+#line 3097
 /* the most players a hosted game starts with (16), up to the list's 128 */
 #define HOST_DEFAULT_MAXIMUM_PLAYERS_INDEX 4
 
@@ -3575,10 +3625,13 @@ static void gametype_list_update(struct widget_instance *list)
 		text_set(named(description, "gametype_right_name", 0), text);
 		if (playlist_profile_get(multiplayer.gametypes[multiplayer.bank[multiplayer.gametype_chosen]], &variant))
 		{
-			long engine = PIN(variant.game_engine_index, 0, 5);
+			long engine = PIN(variant.game_engine_index, 0, (long)NUMBEROF(engine_names) - 1);
 
+			/* (the pictures are the Xbox's game types': Bomb's is Oddball's
+			skull, the bomb being the map's oddball) */
 			if ((widget = named(description, "gametype_right_pic", 0)) != NULL)
-				widget->animation.current_frame_index = (short)engine;
+				widget->animation.current_frame_index = (short)(engine == game_engine_bomb ? game_engine_oddball :
+					engine <= 5 ? engine : 0);
 			usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\nScore to win: %ld", engine_names[engine],
 				variant.universal_variant.teams ? L"Teams" : L"Free for all", variant.universal_variant.score_to_win);
 			text[NUMBEROF(text) - 1] = 0;
@@ -3718,7 +3771,19 @@ static boolean server_settings_initialize(struct widget_instance *list)
 		ustrncpy(multiplayer.game_name, profile.player_name, NUMBEROF(multiplayer.game_name) - 1);
 	}
 	if (spinner)
+	{
+#ifdef HALO_SWITCH_CONSOLE
+		/* port: the choices up to HOSTED_PLAYERS_LIMIT (the spinner's left and
+		right wrap at its count of items) */
+		spinner->parameters.list.number_of_items = (word)MIN(spinner->parameters.list.number_of_items,
+			maximum_players_choices());
+		*server_settings_maximum_players_index() = (short)PIN(*server_settings_maximum_players_index(), 0,
+			maximum_players_choices() - 1);
+#endif
+#line 3721
 		spinner->parameters.list.selected_index = *server_settings_maximum_players_index();
+	}
+#line 3722
 	/* (PUBLIC or PRIVATE: this game's; the screen is made again on coming
 	back from an option's screen) */
 	if ((spinner = named(list, "listing_spinner", 0)) != NULL)
@@ -3745,7 +3810,7 @@ static void server_settings_update(struct widget_instance *list)
 
 	if (spinner)
 		*server_settings_maximum_players_index() = (short)PIN(spinner->parameters.list.selected_index, 0,
-			NUMBEROF(maximum_players) - 1);
+			maximum_players_choices() - 1);
 	wide_to_text(multiplayer.game_name, text, sizeof(text));
 	text_field_show(named(list, "server_name_value", 0), text, text_field_editing(row));
 	if (multiplayer.mode != _multiplayer_mode_host_internet)
@@ -4116,7 +4181,7 @@ static short campaign_level_of(char const *map_name)
 CO-OP for one with none (network co-op: ui_widget_port_cooperative_level_choose) */
 static wchar_t const *game_type_name(long engine_type)
 {
-	return engine_type == 0 ? L"CO-OP" : engine_names[PIN(engine_type, 0, 5)];
+	return engine_type == 0 ? L"CO-OP" : ENGINE_NAME(engine_type);
 }
 
 /* a map's name as the menus show it (a campaign level's too, hosted as
@@ -4321,11 +4386,18 @@ static long lobby_browser_compare_text(char const *a, char const *b)
 	}
 }
 
+static int lobby_browser_version_state(struct p2p_listing const *game, short *version);
+
 /* two games' order in the column chosen (0: as p2p_lobby_games has them) */
 static long lobby_browser_compare(struct p2p_listing const *a, struct p2p_listing const *b)
 {
 	long order;
+	short version;
+	int a_state = lobby_browser_version_state(a, &version), b_state = lobby_browser_version_state(b, &version);
 
+	/* (a game of another network version last, whichever way sorted) */
+	if (!a_state != !b_state)
+		return a_state ? 1 : -1;
 	switch (lobby_browser.sort)
 	{
 	case _lobby_browser_sort_name: order = lobby_browser_compare_text(a->name, b->name); break;
@@ -4547,7 +4619,7 @@ static void lobby_browser_listed_map(struct browser_game const *game, char *map,
 static void lobby_browser_add_listed(void)
 {
 	/* (its gametypes as a listing names them) */
-	static char const *const gametypes[] = { "Game", "CTF", "Slayer", "Oddball", "King", "Race" };
+	static char const *const gametypes[] = { "Game", "CTF", "Slayer", "Oddball", "King", "Race", "Bomb" };
 	short index, kept;
 
 	lobby_browser_listed.count = 0;
@@ -4662,6 +4734,22 @@ static short lobby_browser_score_limit(struct p2p_listing const *game)
 	return listed ? listed->score_limit : 0;
 }
 
+/* a game list's game of another network version than this build joins: -1
+older, 1 newer, else 0 (a listing's, and any game of this version) */
+static int lobby_browser_version_state(struct p2p_listing const *game, short *version)
+{
+	struct browser_game const *listed = lobby_browser_listed_game(game);
+
+	if (!listed)
+	{
+		/* (a listing the game list lacks, over the brokers: by its own number) */
+		*version = (short)game->version;
+		return browser_version_state(game->version);
+	}
+	*version = (short)listed->version;
+	return browser_game_version_state(listed);
+}
+
 /* the Rules line's host, when the list has it (docs/delta.md, Delta List):
 " (MAC HOST, DELTA)", " (DEDICATED, LINUX, DELTA)", " (OPENCE)"; "" if not */
 static void lobby_browser_host_text(struct p2p_listing const *game, wchar_t *text, short size)
@@ -4684,6 +4772,14 @@ static void lobby_browser_host_text(struct p2p_listing const *game, wchar_t *tex
 		(dedicated || platform[0]) && listed->protocol ? L", " : L"",
 		listed->protocol == BROWSER_PROTOCOL_DELTA ? L"DELTA" : L"",
 		listed->protocol == BROWSER_PROTOCOL_OPENCE ? L"OPENCE" : L"");
+	/* (its network version: an OpenCE host's always, a Delta host's when not this build's) */
+	if (listed->version && (listed->protocol == BROWSER_PROTOCOL_OPENCE ||
+		(listed->protocol == BROWSER_PROTOCOL_DELTA && listed->version != delta_legacy_announce())))
+	{
+		short length = (short)ustrlen(text);
+
+		usnprintf(text + length, size - 1 - length, L", NETWORK %d", listed->version);
+	}
 	text[size - 1] = 0;
 	if (text[0])
 	{
@@ -4719,7 +4815,22 @@ static void lobby_browser_host_text(struct p2p_listing const *game, wchar_t *tex
 	(void)size;
 	text[0] = 0;
 }
+
+static int lobby_browser_version_state(struct p2p_listing const *game, short *version)
+{
+	*version = (short)game->version;
+	return browser_version_state(game->version);
+}
 #endif
+
+/* why a game of another network version is not joined (state from
+lobby_browser_version_state), in a message's words */
+static void lobby_browser_version_text(int state, short version, wchar_t *text, short size)
+{
+	usnprintf(text, size - 1, L"This game runs %s version (network %d) and can't be joined.",
+		state < 0 ? L"an older" : L"a newer", version);
+	text[size - 1] = 0;
+}
 
 /* a game's map as the menus show it, and its family (a Halo PC map's named
 as the menus' map list names it: server_browser.c) */
@@ -4730,6 +4841,29 @@ static short lobby_browser_map_name(struct p2p_listing const *game, wchar_t *tex
 	if (family == _map_family_xbox)
 		map_display_name(game->map, text);
 	return family;
+}
+
+/* a game's map's mark after its name: before, after (" (", ")"), and its
+family's (HALOMD, HALO PC) or its pack's tag (CE+) between, in capitals
+(long: the Rules line's), else its short tag (MD, PC, CE+) after a space */
+static void lobby_browser_map_mark(struct p2p_listing const *game, short family, boolean long_mark, wchar_t *mark,
+	short size)
+{
+	char tag[16], title[64], text[24];
+	short index;
+
+	mark[0] = 0;
+	if (family == _map_family_xbox)
+		return;
+	if (family == _map_family_pack)
+		ui_map_list_map_tag(game->map, tag, sizeof(tag), title, sizeof(title));
+	else
+		snprintf(tag, sizeof(tag), "%s", family == _map_family_halomd ? (long_mark ? "HALOMD" : "MD") :
+			long_mark ? "HALO PC" : "PC");
+	snprintf(text, sizeof(text), long_mark ? " (%s)" : " %s", tag);
+	for (index = 0; text[index] && index < size - 1; index++)
+		mark[index] = (wchar_t)(unsigned char)text[index];
+	mark[index] = 0;
 }
 
 /* the Players line: how many of how many (and who, when it is known) */
@@ -4748,6 +4882,7 @@ static void lobby_browser_rules_text(struct p2p_listing const *game, wchar_t *te
 	wchar_t map[ROW_TEXT_LENGTH];
 	wchar_t score[16];
 	wchar_t host[64];
+	wchar_t mark[24];
 	short score_limit = lobby_browser_score_limit(game);
 	short family;
 
@@ -4759,8 +4894,9 @@ static void lobby_browser_rules_text(struct p2p_listing const *game, wchar_t *te
 	/* (a dedicated server's game says so: its listing's flag, p2p_lobby.c;
 	a game list's game, its host as the list says) */
 	lobby_browser_host_text(game, host, NUMBEROF(host));
-	usnprintf(text, size - 1, L"%s%s on %s%s%s%s%s%s", gametype[0] ? gametype : engine_names[PIN(game->engine_type, 0, 5)],
-		score, map, family == _map_family_halomd ? L" (HALOMD)" : family != _map_family_xbox ? L" (HALO PC)" : L"",
+	lobby_browser_map_mark(game, family, TRUE, mark, NUMBEROF(mark));
+	usnprintf(text, size - 1, L"%s%s on %s%s%s%s%s%s", gametype[0] ? gametype : ENGINE_NAME(game->engine_type),
+		score, map, mark,
 		game->dedicated && !host[0] ? L" (DEDICATED)" : L"", host,
 		!game->open ? L": full or starting" : game->in_progress ? L": under way" : L"",
 		game->locked ? L", password" : L"");
@@ -4778,7 +4914,7 @@ static void lobby_browser_update(struct widget_instance *list)
 	wchar_t text[ROW_TEXT_LENGTH * 2];
 	wchar_t players[ROW_TEXT_LENGTH * 2];
 	unsigned long now = system_milliseconds();
-	short chosen;
+	short chosen, version_of = 0;
 	boolean message;
 
 	lobby_browser.count = lobby_browser_valid_games(lobby_browser.games,
@@ -4831,9 +4967,11 @@ static void lobby_browser_update(struct widget_instance *list)
 		family = lobby_browser_map_name(game, text);
 		if (family != _map_family_xbox)
 		{
+			wchar_t mark[24];
 			short length = (short)ustrlen(text);
 
-			usnprintf(text + length, ROW_TEXT_LENGTH - 1 - length, family == _map_family_halomd ? L" MD" : L" PC");
+			lobby_browser_map_mark(game, family, FALSE, mark, NUMBEROF(mark));
+			usnprintf(text + length, ROW_TEXT_LENGTH - 1 - length, L"%s", mark);
 			text[ROW_TEXT_LENGTH - 1] = 0;
 		}
 		text_set(named(row, "server_item_map", 0), text);
@@ -4841,8 +4979,13 @@ static void lobby_browser_update(struct widget_instance *list)
 		usnprintf(text, ROW_TEXT_LENGTH - 1, L"%d/%d", game->player_count, game->maximum_player_count);
 		text_set(named(row, "server_item_players", 0), text);
 		/* (no ping yet: its host is reached only on joining) */
-		text_set(named(row, "server_item_ping", 0), game->failed ? L"FAILED" : !game->open ? L"CLOSED" :
-			game->in_progress ? L"LIVE" : L"");
+		{
+			short version;
+			int state = lobby_browser_version_state(game, &version);
+
+			text_set(named(row, "server_item_ping", 0), game->failed ? L"FAILED" : state ? (state < 0 ? L"OLD" : L"NEW") :
+				!game->open ? L"CLOSED" : game->in_progress ? L"LIVE" : L"");
+		}
 		/* (the lock: a game with a password. Its bitmap's first frame is
 		empty, the PC version's for no lock; the next is the lock, in the
 		menus' blue) */
@@ -4927,6 +5070,13 @@ static void lobby_browser_update(struct widget_instance *list)
 		}
 		else if (lobby_browser.message[0] && now - lobby_browser.message_time < LOBBY_BROWSER_MESSAGE_TIME)
 			usnprintf(text, NUMBEROF(text) - 1, L"%s", lobby_browser.message);
+		/* (a game of another network version) */
+		else if (chosen < lobby_browser.count &&
+			lobby_browser_version_state(&lobby_browser.games[chosen], &version_of))
+		{
+			lobby_browser_version_text(lobby_browser_version_state(&lobby_browser.games[chosen], &version_of), version_of,
+				text, NUMBEROF(text));
+		}
 		/* (what stops the chosen game being joined here: its Halo PC map) */
 		else if (chosen < lobby_browser.count &&
 			server_browser_map_blocked(lobby_browser.games[chosen].map, text, NUMBEROF(text)))
@@ -5038,6 +5188,19 @@ static boolean lobby_browser_select(struct widget_instance *widget, short contro
 	if (index >= lobby_browser.count)
 		return campaign_fail();
 	game = &lobby_browser.games[index];
+	/* (a game of another network version is listed, not joined) */
+	{
+		wchar_t blocked[ROW_TEXT_LENGTH * 2];
+		short version = 0;
+		int state = lobby_browser_version_state(game, &version);
+
+		if (state)
+		{
+			lobby_browser_version_text(state, version, blocked, NUMBEROF(blocked));
+			lobby_browser_message(blocked);
+			return campaign_fail();
+		}
+	}
 	/* (a Halo PC map's game, only with the map: a join without it would
 	fail at its loading) */
 	{
@@ -5365,7 +5528,7 @@ static boolean pause_change_teams(struct widget_instance *widget)
 }
 
 /* "port pause controls" (the pause menu's CONTROLS: menu_tags.c): the
-Gearbox and Chupathingy menus' opens their Controls Setup (its handler's
+Gearbox menus' opens their Controls Setup (its handler's
 widget), on player 1's profile, edited for it if none is (OK saves it); the
 Xbox's, which have no such screen, the Controls screen over the pause menu
 (controls_screen.c), for the menu's player */
@@ -5816,7 +5979,7 @@ static void lobby_update(struct widget_instance *list)
 		ustrncpy(gametype, game->variant.human_readable_game_description, NUMBEROF(gametype) - 1);
 		gametype[NUMBEROF(gametype) - 1] = 0;
 		usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\n%d of %d players\r\n\r\n%s", gametype,
-			engine_names[PIN(game->variant.game_engine_index, 0, 5)], lobby_player_count, game->maximum_players,
+			ENGINE_NAME(game->variant.game_engine_index), lobby_player_count, game->maximum_players,
 			seconds > 0 ? L"Starting in:" :
 				game->machine_count < 2 && !network_game_solo_game() ? L"Waiting for players" : L"");
 		text[NUMBEROF(text) - 1] = 0;
@@ -5826,7 +5989,10 @@ static void lobby_update(struct widget_instance *list)
 
 			usnprintf(text + length, NUMBEROF(text) - 1 - length, L" %d", seconds);
 		}
-		if (global_network_game_server_get() && p2p_invite_link(link, sizeof(link)))
+		/* (copied by itself only with network.copy_to_clipboard:
+		sdl_platform.c) */
+		if (global_network_game_server_get() && config_boolean("network.copy_to_clipboard") &&
+			p2p_invite_link(link, sizeof(link)))
 		{
 			size_t length = ustrlen(text);
 
@@ -6440,7 +6606,7 @@ static void gametype_setup_type(wchar_t *text)
 	ustrncpy(name, gametype_edit.setup_variant.human_readable_game_description, NUMBEROF(name) - 1);
 	name[NUMBEROF(name) - 1] = 0;
 	usnprintf(text, ROW_TEXT_LENGTH - 1, L"%s (%s%s)", name,
-		engine_names[PIN(gametype_edit.setup_variant.game_engine_index, 0, 5)],
+		ENGINE_NAME(gametype_edit.setup_variant.game_engine_index),
 		gametype_edit.setup_variant.universal_variant.teams ? L", TEAMS" : L"");
 	text[ROW_TEXT_LENGTH - 1] = 0;
 }
@@ -6509,10 +6675,13 @@ static void gametype_edit_list_update(struct widget_instance *list)
 		text_set(named(description, "gametype_right_name", 0), text);
 		if (playlist_profile_get(profile_index, &variant))
 		{
-			long engine = PIN(variant.game_engine_index, 0, 5);
+			long engine = PIN(variant.game_engine_index, 0, (long)NUMBEROF(engine_names) - 1);
 
+			/* (the pictures are the Xbox's game types': Bomb's is Oddball's
+			skull, the bomb being the map's oddball) */
 			if ((widget = named(description, "gametype_right_pic", 0)) != NULL)
-				widget->animation.current_frame_index = (short)engine;
+				widget->animation.current_frame_index = (short)(engine == game_engine_bomb ? game_engine_oddball :
+					engine <= 5 ? engine : 0);
 			usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\nScore to win: %ld", engine_names[engine],
 				variant.universal_variant.teams ? L"Teams" : L"Free for all", variant.universal_variant.score_to_win);
 			text[NUMBEROF(text) - 1] = 0;
@@ -6660,11 +6829,14 @@ ui\multiplayer_game_text, as the Xbox's: capture the flag 3, slayer 4,
 oddball 5, king of the hill 6, race 7, unknown 8) */
 static void gametype_engine_name(struct widget_instance *text_box)
 {
-	static short const strings[] = { 8, 3, 4, 5, 6, 7 };
+	static short const strings[] = { 8, 3, 4, 5, 6, 7, 8 };
 	struct game_variant *variant = edit_variant();
 
 	if (variant)
-		text_box->parameters.text_box.string_list_index = strings[PIN(variant->game_engine_index, 0, 5)];
+	{
+		text_box->parameters.text_box.string_list_index =
+			strings[PIN(variant->game_engine_index, 0, (long)NUMBEROF(strings) - 1)];
+	}
 }
 
 /* ---------- the Chupathingy menus' GAME SETUP and game type editor
@@ -6677,7 +6849,8 @@ with it), the internet play port, the game type (left and right choose
 another, Y or A edits it), and the host's rules of config.toml
 (network.team_change and its margin, network.chat_filter,
 network.block_mouse_aim_assist), written as START GAME (A) opens the lobby.
-B leaves them as they were.
+The host's rules are a nested list, as the settings screens' are: HOST
+RULES opens it, and B goes back out of it. B leaves them as they were.
 
 The editor shows every setting of the game type, as the dedicated server's
 game type files have them (server/src/server_config.c's table), a page at
@@ -6697,7 +6870,7 @@ update") fills them with the rows the screen shows, and their events
 gametype's choice did) */
 #define HOST_EDIT_SCREEN "pc\\chupathingy\\host\\edit_general"
 #define HOST_LOBBY_SCREEN "ui\\shell\\main_menu\\multiplayer_type_select\\connected\\pregame\\connected_pregame_screen"
-#define HOST_SETUP_ROWS 11
+#define HOST_SETUP_ROWS 8
 #define HOST_EDIT_ROWS 10
 /* a message (a game type not saved) shows this long in place of the help */
 #define HOST_MESSAGE_DURATION 4000
@@ -6717,6 +6890,8 @@ enum
 	_host_row_team_change_margin,
 	_host_row_chat_filter,
 	_host_row_aim_assist,
+	/* (the row that opens the host's rules, the four above) */
+	_host_row_rules,
 	_host_row_start,
 	NUMBER_OF_HOST_ROWS
 };
@@ -6724,7 +6899,7 @@ enum
 static wchar_t const *const host_row_labels[NUMBER_OF_HOST_ROWS] =
 {
 	L"GAME NAME:", L"MAX PLAYERS:", L"PUBLIC LOBBY:", L"PASSWORD:", L"PORT:", L"GAME TYPE:", L"TEAM SWITCHING:",
-	L"TEAM SWITCH MARGIN:", L"CHAT FILTER:", L"MOUSE AIM ASSIST:", L"START GAME",
+	L"TEAM SWITCH MARGIN:", L"CHAT FILTER:", L"MOUSE AIM ASSIST:", L"HOST RULES", L"START GAME",
 };
 
 /* the editor's pages, by their screens' names */
@@ -6762,6 +6937,8 @@ static struct
 	/* a message in place of the help, and when it was given */
 	wchar_t message[128];
 	unsigned long message_time;
+	/* whether GAME SETUP shows the host's rules (HOST RULES' nested list) */
+	boolean rules_open;
 #ifdef HALO_GAME_BROWSER
 	/* the game type being edited, and its base's values */
 	boolean editing;
@@ -6841,6 +7018,12 @@ static boolean host_listing_shown(void)
 	return config_boolean("network.online") && config_boolean("network.public_lobby");
 }
 
+/* whether a row is one of the host's rules (HOST RULES' nested list) */
+static boolean host_rules_row(short row)
+{
+	return row >= _host_row_team_change && row <= _host_row_aim_assist;
+}
+
 static void host_setup_rows(void)
 {
 	short row;
@@ -6848,7 +7031,8 @@ static void host_setup_rows(void)
 	host_setup.row_count = 0;
 	for (row = 0; row < NUMBER_OF_HOST_ROWS; row++)
 	{
-		if ((row == _host_row_public && !host_listing_shown()) ||
+		if (host_rules_row(row) != host_setup.rules_open ||
+			(row == _host_row_public && !host_listing_shown()) ||
 			(row == _host_row_password && (!host_listing_shown() || multiplayer.game_private)) ||
 			(row == _host_row_team_change_margin && host_setup.team_change != 0))
 		{
@@ -6958,6 +7142,8 @@ static wchar_t const *host_setup_help(short row)
 	case _host_row_aim_assist:
 		return host_setup.block_aim_assist ? L"Aim assist is off for mouse players." :
 			L"Each player's own aim assist setting decides.";
+	case _host_row_rules:
+		return L"Team switching, the chat filter and mouse aim assist.";
 	case _host_row_start:
 		return L"Open the lobby.";
 	}
@@ -6978,7 +7164,7 @@ static boolean host_setup_change(short row, short direction)
 	{
 	case _host_row_maximum_players:
 		multiplayer.maximum_players_index = (short)PIN(multiplayer.maximum_players_index + direction, 0,
-			NUMBEROF(maximum_players) - 1);
+			maximum_players_choices() - 1);
 		return TRUE;
 	case _host_row_public:
 		multiplayer.game_private = !multiplayer.game_private;
@@ -7509,6 +7695,7 @@ static boolean host_initialize(struct widget_instance *list)
 	host_setup.first = 0;
 	host_setup.focused = 0;
 	host_setup.message[0] = 0;
+	host_setup.rules_open = FALSE;
 	if (page == _host_page_setup)
 	{
 		if (server != host_setup.server || !server)
@@ -7657,6 +7844,23 @@ static void host_update(struct widget_instance *list)
 		text_set_length(help, text, NUMBEROF(text));
 }
 
+/* HOST RULES' nested list opened (the focus on its first row) or closed
+(the focus back on HOST RULES) */
+static void host_rules_show(struct widget_instance *list, boolean open)
+{
+	short slot = 0;
+
+	host_setup.rules_open = open;
+	host_setup.first = 0;
+	host_setup_rows();
+	while (!open && slot < host_setup.row_count - 1 && host_setup.rows[slot] != _host_row_rules)
+		slot++;
+	if (list)
+		focus_row(list, slot);
+	host_setup.focused = slot;
+	ui_play_audio_feedback_sound(open ? SOUND_FORWARD : SOUND_BACK);
+}
+
 static void host_name_done(char const *text)
 {
 	game_name_done(text);
@@ -7686,6 +7890,11 @@ static boolean host_row_a(struct widget_instance *row, boolean *widget_deleted)
 	if (setup && shown == _host_row_password)
 	{
 		text_field_begin_masked(row, multiplayer.game_password, PASSWORD_LENGTH, server_password_done);
+		return TRUE;
+	}
+	if (setup && shown == _host_row_rules)
+	{
+		host_rules_show(row->parent, TRUE);
 		return TRUE;
 	}
 #ifdef HALO_GAME_BROWSER
@@ -7783,6 +7992,11 @@ static boolean host_back(struct widget_instance *widget, boolean *widget_deleted
 	if (text_field_editing(NULL))
 	{
 		text_field_end(FALSE);
+		return TRUE;
+	}
+	if (host_setup.rules_open && named(widget, "setup_list", 0))
+	{
+		host_rules_show(named(widget, "setup_list", 0), FALSE);
 		return TRUE;
 	}
 #ifdef HALO_GAME_BROWSER

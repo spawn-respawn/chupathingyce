@@ -4,7 +4,7 @@ P2P.H
 Internet play (p2p.c): machines that shared an invite reach each other's
 system link games as if they were on one LAN. xnet.c routes the game's
 traffic for them through here; sdl_platform.c passes invite links in and
-out through the clipboard.
+out through the clipboard, as the player's settings allow.
 
 Addresses and ports are in network byte order.
 */
@@ -99,7 +99,7 @@ a stream's) */
 void p2p_socket_closed(int socket, unsigned short datagram_port);
 
 /* text for the clipboard (a new invite link), once; NULL if none. Called
-from the main thread */
+from the main thread, which copies it only with network.copy_to_clipboard */
 const char *p2p_take_clipboard_text(void);
 
 /* whether a game this machine hosts may be joined from the internet (an
@@ -182,6 +182,10 @@ struct p2p_listing
 	unsigned char sealed_token[P2P_LISTING_SEALED_TOKEN_SIZE];
 	/* the network version it was listed under (0: not known) */
 	unsigned short version;
+	/* the game's kind (version 37: an OpenCE game type's number in the low
+	seven bits, Hardcore in bit 7; 0 for a stock game or an older host),
+	read from the listing's stamp; only a name for the list */
+	unsigned char kind;
 };
 /* a copy of the public games found, each once (p2p_listing_older_copy), in
 the order shown (the most players first; then those not failed, the open
@@ -196,6 +200,12 @@ way) are one game, kept at its newest version, and of copies of that, the
 last heard (heard_times: p2p_now's); two hosts' games of one version stay
 apart. The game list's rule too (its one_per_version_set) */
 int p2p_listing_older_copy(const struct p2p_listing *games, const unsigned long *heard_times, int count, int index);
+/* p2p_listing_older_copy, for a client that joins versions minimum to
+maximum: games of other versions are kept too (the browser marks them, and
+joins none), but each as a game of their own side of the window only, and
+never beside a copy that is joinable */
+int p2p_listing_hidden_copy(const struct p2p_listing *games, const unsigned long *heard_times, int count, int index,
+	int minimum, int maximum);
 /* a game the browser could not join: kept, marked failed, for this run */
 void p2p_lobby_mark_failed(const unsigned char *identifier);
 /* a locked game's invite (into its invite), if the password is its own:

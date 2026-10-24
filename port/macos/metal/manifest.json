@@ -12,8 +12,7 @@
   "replaced": {
     "d3d8_gl.c": {
       "with": "xbox_compat/xbox_device.c",
-      "base": "d30d0a8263e39a97fef951756eb73e7f23df5212",
-      "seen": "681f31df76f250b7cd97b8210e9c6fc79e047a65",
+      "base": "6eba8da1a8a4174d729a90c5da23281fcee3d255",
       "why": "The Xbox D3D8 device: the same D3DDevice_* entry points, translated to the Metal backend (renderer/gpu.h) instead of OpenGL. The acknowledged updates add console GL-layer/window hooks, not used by macOS Metal."
     },
     "d3d8_resources.c": {
@@ -44,12 +43,12 @@
     },
     "sdl_platform.c": {
       "with": "platform/sdl_platform.c",
-      "base": "8ffb0ffe21b3a63020de4981e26a9f1f1f18555c",
+      "base": "ad49e59630db6f390dca2fe6cc1cbb8e68d83aca",
       "why": "A Metal window (SDL_WINDOW_METAL): no OpenGL context, swap interval or GL entry points."
     },
     "port_config.c": {
       "with": "platform/port_config.c",
-      "base": "95428fe959a472c45ba67712e6f1d8a99f999ae8",
+      "base": "6b34de3ee07f9e44c6c52e4eb79e021bcb8f3077",
       "upstream_base": "e01e714c01ec4c28c87551e3ee737776a63b7805",
       "why": "The Metal renderer's own settings (debug.metal_*, display.* that only Metal reads); every other setting is upstream's, as upstream has it (tests/test_metal_settings_parity.py)."
     },
@@ -61,7 +60,7 @@
     },
     "ui_overlay.c": {
       "with": "platform/ui_overlay.c",
-      "base": "81c23cf4aeedea5e1b56135a59a2e6c151faaee1",
+      "base": "37c6551a7f2a69abc702328087e123bbf17927ac",
       "why": "The overlay drawn into the Metal back buffer (renderer/metal_overlay.inc) instead of with GL calls."
     },
     "hud_hires.c": {
@@ -91,6 +90,7 @@
   "shared": {
     "comment": "Compiled unchanged into the Metal build (with the Mac include directories first).",
     "files": [
+      "bink_ffmpeg.c",
       "bink_null.c",
       "browser.c",
       "browser_ping.c",
@@ -149,6 +149,7 @@
       "ui_point.c",
       "update_manifest.c",
       "update_signature.c",
+      "thread_stop.c",
       "updater.c",
       "xbdm.c",
       "xbox_files.c",
@@ -170,8 +171,7 @@
     },
     "platform.h": {
       "with": "platform/platform.h",
-      "base": "d73ab243ca65e963d899896a50d685a25b7c6159",
-      "seen": "e89c91e18c3374216fc3b6a3c2003e6bd2c60965",
+      "base": "94fa6e783ff1d0269cbe6c703197aaff7b6521ac",
       "why": "Adds the Metal front-end hooks (platform_renderer_metal, platform_fixed_timestep). The acknowledged window-rebase and guest-memory hooks are for 32-bit console builds, not 64-bit macOS."
     },
     "port_config.h": {

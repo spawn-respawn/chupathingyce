@@ -238,9 +238,9 @@ static const struct config_setting config_settings[] =
 		"\"auto\" (\"cpu\" on Adreno graphics, \"gpu\" on others)." },
 	{ "display.vsync", _config_boolean, "true", "HALO_NO_VSYNC", _environment_set_is_false, _platform_all,
 		"Wait for the display between frames." },
-	{ "display.max_fps", _config_integer, "0", "HALO_MAX_FPS", _environment_value, _platform_desktop,
+	{ "display.max_fps", _config_integer, "0", "HALO_MAX_FPS", _environment_value, _platform_all,
 		"With vsync off, the frame rate limit: 0 for twice the display's rate,\n"
-		"-1 for none (can hang some Intel graphics)." },
+		"-1 for none (can hang some Intel graphics, and heats a phone)." },
 	{ "display.anti_aliasing", _config_string, DEFAULT_ANTI_ALIASING, "HALO_ANTI_ALIASING", _environment_value,
 		_platform_all,
 		"Smooth jagged edges: \"off\", \"fxaa\", \"smaa\", \"ssaa2x\", \"msaa2x\",\n"
@@ -250,7 +250,7 @@ static const struct config_setting config_settings[] =
 		"Draw a frame for every display refresh, blending between the game's 30\n"
 		"ticks a second." },
 	{ "display.direct_camera", _config_boolean, "true", "HALO_DIRECT_CAMERA", _environment_value,
-		_platform_desktop | _platform_xbox,
+		_platform_all | _platform_xbox,
 		"In first person, point the view where the player aims now instead of\n"
 		"where the last tick left it: the view turns the frame the mouse moves,\n"
 		"not up to two ticks (66 ms) later." },
@@ -310,10 +310,21 @@ static const struct config_setting config_settings[] =
 	{ "display.powerup_timers", _config_boolean, "false", "HALO_POWERUP_TIMERS", _environment_value, _platform_all,
 		"Show the seconds left on your active camouflage, overshield and full\n"
 		"spectrum vision." },
-	{ "display.loading_screen_min_seconds", _config_real, "0.0", "HALO_LOADING_SCREEN_MIN_SECONDS",
+	{ "display.loading_screen", _config_boolean, "true", "HALO_LOADING_SCREEN", _environment_value,
+		_platform_all,
+		"Keep the original loading screen up for a while when a level loads,\n"
+		"as loading from the Xbox's disc did, for the times below; false loads\n"
+		"every level as fast as it can." },
+	{ "display.loading_screen_campaign_seconds", _config_real, "0.0", "HALO_LOADING_SCREEN_CAMPAIGN_SECONDS",
 		_environment_value, _platform_all,
-		"The shortest time the loading screen stays up, up to 30 seconds; 0 for\n"
-		"no wait. Campaign and split screen only." },
+		"The least seconds the loading screen stays up when a campaign level\n"
+		"loads on this machine alone, split screen co-op too (up to 30); 0 for\n"
+		"no wait. A longer load shows for as long as it takes." },
+	{ "display.loading_screen_multiplayer_seconds", _config_real, "0.0", "HALO_LOADING_SCREEN_MULTIPLAYER_SECONDS",
+		_environment_value, _platform_all,
+		"The same for every other game: split screen multiplayer, system link,\n"
+		"online and network co-op, up to 5: the network waits while the\n"
+		"loading screen is held." },
 	{ "display.scoreboard_team_layout", _config_string, "\"teams\"", "HALO_SCOREBOARD_TEAM_LAYOUT", _environment_value,
 		_platform_all,
 		"A team game's scoreboard: \"teams\" (a column for each team) or \"score\"\n"
@@ -340,7 +351,7 @@ static const struct config_setting config_settings[] =
 		"Show CHANGE TEAMS in the pause menu of a team game." },
 #ifndef HALO_CONSOLE_NO_CONTROLS
 	{ "display.pause_controls", _config_boolean, "true", "HALO_PAUSE_CONTROLS", _environment_value, _platform_all,
-		"Show CONTROLS in the pause menu." },
+		"Show CONTROLS in the Xbox and Gearbox menus' pause menu." },
 #endif
 	{ "display.server_messages", _config_boolean, "true", "HALO_SERVER_MESSAGES", _environment_value, _platform_all,
 		"Show the banner for a Delta server's warnings and notices." },
@@ -376,6 +387,16 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"The audio buffer in sample frames, 64 to 8192. Raise it if the sound\n"
 		"cuts out; lower it for less delay." },
+	{ "audio.channels", _config_string, "\"auto\"", "HALO_AUDIO_CHANNELS", _environment_value, _platform_desktop,
+		"\"stereo\", \"5.1\" or \"7.1\" (surround, as the Xbox's Dolby Digital),\n"
+		"or \"auto\": 5.1 or 7.1 when the sound device has 6 or 8 channels, else\n"
+		"stereo. Read when the game starts." },
+	{ "audio.doppler", _config_boolean, "true", "HALO_AUDIO_DOPPLER", _environment_value, _platform_all,
+		"Shift the pitch of moving sounds (a Warthog or a projectile going past),\n"
+		"as the Xbox did; false keeps them at their pitch." },
+	{ "audio.hrtf", _config_string, "\"off\"", "HALO_AUDIO_HRTF", _environment_value, _platform_all,
+		"Binaural 3D sound for headphones (HRTF): \"off\", \"on\", or \"auto\" for\n"
+		"on when the output's name says it is headphones. Stereo output only." },
 
 	{ "audio.reverb", _config_boolean, "true", "HALO_REVERB", _environment_value, _platform_all,
 		"Echo sounds to match the place you are in." },
@@ -385,16 +406,16 @@ static const struct config_setting config_settings[] =
 	{ "input.touch_controls", _config_string, "\"on\"", "HALO_TOUCH_CONTROLS", _environment_value, _platform_android,
 		"On-screen touch controls: \"on\", \"auto\" (only with no controller\n"
 		"connected) or \"off\"." },
-	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_desktop,
+	{ "input.mouse_sensitivity", _config_real, "1.0", "HALO_MOUSE_SENSITIVITY", _environment_value, _platform_all,
 		"How fast the view turns with the mouse." },
-	{ "input.invert_mouse", _config_boolean, "false", "HALO_MOUSE_INVERT", _environment_set_is_true, _platform_desktop,
+	{ "input.invert_mouse", _config_boolean, "false", "HALO_MOUSE_INVERT", _environment_set_is_true, _platform_all,
 		"Moving the mouse forward looks down." },
 	{ "input.keyboard_prompts", _config_boolean, "true", "HALO_KEYBOARD_PROMPTS", _environment_value, _platform_desktop,
 		"Show keys in button prompts while using the keyboard and mouse." },
-	{ "input.mouse_aim_assist", _config_boolean, "false", "HALO_MOUSE_AIM_ASSIST", _environment_value, _platform_desktop,
+	{ "input.mouse_aim_assist", _config_boolean, "false", "HALO_MOUSE_AIM_ASSIST", _environment_value, _platform_all,
 		"Aim assist for the mouse, as with a controller." },
 	{ "input.mouse_vertical_sensitivity", _config_real, "0.0", "HALO_MOUSE_VERTICAL_SENSITIVITY", _environment_value,
-		_platform_desktop,
+		_platform_all,
 		"How fast the view turns up and down with the mouse; 0 for the same as\n"
 		"input.mouse_sensitivity." },
 
@@ -490,6 +511,50 @@ static const struct config_setting config_settings[] =
 		"hugeass@ce), or \"*\" for all. Their scripts can't change your settings\n"
 		"or other players' games." },
 
+	{ "game.pack_menus", _config_string, "\"\"", "HALO_PACK_MENUS", _environment_value, _platform_all | _platform_xbox,
+		"Play with a map pack's own menus, by the pack's folder name: \"cex\" uses\n"
+		"maps_cex/ui.map (Halo CE+'s) in place of the game's; \"\" (the default)\n"
+		"keeps the game's. Takes effect after a restart." },
+
+	{ "game.bomb_spawns", _config_string, "\"\"", "HALO_BOMB_SPAWNS", _environment_value, _platform_all,
+		"Where a Bomb or Grifball game you host puts the bomb on a map, for maps\n"
+		"whose spot halfway between the goals plays badly: \"<map> <x> <y> [<z>]\"\n"
+		"(the map as a playlist names it: bloodgulch, timberland@ce), entries\n"
+		"separated by commas. The bomb rests on the first ground under the point\n"
+		"(from a little over its height, when given). A map not named has the\n"
+		"game's own spot: Blood Gulch's halfway between its teleporters' exits,\n"
+		"any other map's halfway between the goals." },
+	{ "game.bomb_arm_time", _config_real, "1.0", "HALO_BOMB_ARM_TIME", _environment_value, _platform_all,
+		"In a Bomb or Grifball game you host, the seconds the bomb arms once it\n"
+		"is planted in the enemy goal (up to 10): a defender who reaches it in\n"
+		"that time saves it (it resets, no score); else it goes off and scores.\n"
+		"0: it scores the moment it is planted." },
+
+	{ "game.bomb_open_pitch_speed", _config_integer, "0", "HALO_BOMB_OPEN_PITCH_SPEED", _environment_value,
+		_platform_all,
+		"Everyone's speed in a Grifball: Open Pitch game you host, in percent\n"
+		"(50 to 200; the carrier's 115% on top stops at 200). 0: the game\n"
+		"type's own, 175." },
+
+	{ "game.bomb_open_pitch_carrier_health", _config_integer, "0", "HALO_BOMB_OPEN_PITCH_CARRIER_HEALTH",
+		_environment_value, _platform_all,
+		"The bomb carrier's health in a Grifball: Open Pitch game you host, in\n"
+		"percent of everyone's (10 to 400). 0: the game type's own, 400 (with\n"
+		"the resistance's 400, it lives through one melee blow, not two)." },
+	{ "game.bomb_open_pitch_carrier_resistance", _config_integer, "0",
+		"HALO_BOMB_OPEN_PITCH_CARRIER_RESISTANCE", _environment_value, _platform_all,
+		"The bomb carrier's damage resistance in a Grifball: Open Pitch game you\n"
+		"host, in percent (25 to 400; 150 takes two thirds of the damage). 0: the\n"
+		"game type's own, 400." },
+	{ "game.bomb_open_pitch_carrier_shields", _config_string, "\"none\"", "HALO_BOMB_OPEN_PITCH_CARRIER_SHIELDS",
+		_environment_value, _platform_all,
+		"The bomb carrier's shields in a Grifball: Open Pitch game you host:\n"
+		"\"none\" (everyone's: none), \"normal\" or \"overshield\"." },
+	{ "game.bomb_open_pitch_fumble", _config_boolean, "true", "HALO_BOMB_OPEN_PITCH_FUMBLE", _environment_value,
+		_platform_all,
+		"true: in a Grifball: Open Pitch game you host, a melee blow that doesn't\n"
+		"kill the bomb carrier knocks the bomb out of their hands." },
+
 	{ "game.move_old_map_folders", _config_string, "\"ask\"", "HALO_MOVE_OLD_MAP_FOLDERS", _environment_value,
 		_platform_all,
 		"Move maps from the old maps/ce and md_maps folders to maps_ce, maps_md\n"
@@ -520,6 +585,10 @@ static const struct config_setting config_settings[] =
 		_platform_all,
 		"An invite link on the clipboard when the game comes to the front:\n"
 		"\"ask\", \"always\" (join it) or \"never\"." },
+	{ "network.copy_to_clipboard", _config_boolean, "false", "HALO_NET_COPY_TO_CLIPBOARD", _environment_value,
+		_platform_all,
+		"Put a game's invite link on the clipboard when you start to host it.\n"
+		"false: the log has it, and the Gearbox menus' Server Settings copy it." },
 	{ "network.map_downloads", _config_string, "\"ask\"", "HALO_NET_MAP_DOWNLOADS", _environment_value,
 		_platform_all,
 		"Download a missing Custom Edition map from the community repositories:\n"
@@ -671,6 +740,37 @@ static const struct config_setting config_settings[] =
 	{ "debug.network_test_pickup", _config_real, "0.0", "HALO_NETWORK_TEST_PICKUP", _environment_value, _platform_all,
 		"Seconds into a test game to stand the last player on a weapon; 0\n"
 		"never." },
+	{ "debug.network_test_bomb", _config_real, "0.0", "HALO_NETWORK_TEST_BOMB", _environment_value, _platform_all,
+		"In an automated test Bomb game (host:<map>:grifball), this many seconds\n"
+		"in (and again each time that long after) the last player stands on the\n"
+		"bomb, and three seconds later in the goal its team attacks; 0 never." },
+	{ "debug.network_test_bomb_in_goal", _config_boolean, "false", "HALO_NETWORK_TEST_BOMB_IN_GOAL",
+		_environment_value, _platform_all,
+		"With debug.network_test_bomb: the host lays the bomb in the goal the\n"
+		"last player's team attacks before standing the player on it, as a bomb\n"
+		"thrown down in the goal and picked up again." },
+	{ "debug.network_test_bomb_throw", _config_boolean, "false", "HALO_NETWORK_TEST_BOMB_THROW",
+		_environment_value, _platform_all,
+		"With debug.network_test_bomb: the joining machine's player holds the\n"
+		"trigger through each try's first four seconds, picking the bomb up\n"
+		"with it down, throwing it down and picking it up again." },
+	{ "debug.network_test_bomb_keep", _config_boolean, "false", "HALO_NETWORK_TEST_BOMB_KEEP", _environment_value,
+		_platform_all,
+		"With debug.network_test_bomb: the carrier is not moved into the goal (it\n"
+		"keeps the bomb: debug.network_test_melee's blows strike a carrier)." },
+	{ "debug.network_test_bomb_save", _config_boolean, "false", "HALO_NETWORK_TEST_BOMB_SAVE", _environment_value,
+		_platform_all,
+		"With debug.network_test_bomb: the host stands a player of the goal's\n"
+		"team on the bomb planted there as it arms (game.bomb_arm_time), which\n"
+		"saves it." },
+	{ "debug.network_test_fall", _config_real, "0.0", "HALO_NETWORK_TEST_FALL", _environment_value, _platform_all,
+		"In an automated test game, each time this many seconds pass the last\n"
+		"player is lifted 10 world units, for a fall whose landing kills; 0\n"
+		"never." },
+	{ "debug.network_test_melee", _config_real, "0.0", "HALO_NETWORK_TEST_MELEE", _environment_value, _platform_all,
+		"Every this many seconds an automated test host brings its last player in\n"
+		"front of its first, and a player strikes the other with the melee\n"
+		"button: the host's player, then the joining machine's, in turn; 0 never." },
 	{ "debug.network_test_pickup_weapon", _config_string, "\"\"", "HALO_NETWORK_TEST_PICKUP_WEAPON", _environment_value,
 		_platform_all,
 		"The weapon for network_test_pickup, by part of its tag name; empty\n"
@@ -1642,6 +1742,21 @@ static const struct
 
 #define NUMBER_OF_CONFIG_OLD_DEFAULTS (sizeof(config_old_defaults) / sizeof(config_old_defaults[0]))
 
+/* the settings an earlier version had under another name, whose value the
+player chose goes on under the new one (config_forward_renamed) */
+static const struct
+{
+	const char *old_name;
+	const char *name;
+} config_renamed[] =
+{
+	/* the loading screen's one least time, until v0.8.0b: a campaign
+	level's now (a multiplayer game's starts at its own default) */
+	{ "display.loading_screen_min_seconds", "display.loading_screen_campaign_seconds" },
+};
+
+#define NUMBER_OF_CONFIG_RENAMED (sizeof(config_renamed) / sizeof(config_renamed[0]))
+
 /* whether the file's value is the default written as text */
 static int config_datum_is(toml_datum_t datum, enum config_type type, const char *text)
 {
@@ -2192,6 +2307,143 @@ static char *config_follow_old_defaults(const char *text, toml_datum_t table)
 	return result;
 }
 
+/* a file that holds a setting under its older name (config_renamed): that
+name's lines are taken out of it (its value, and its line commented out at
+the default with its help text of that day, each with the comment above it
+and one blank line), and a value the player chose there goes in under the
+new name where the old one was, with the new setting's help text, as
+config_write writes a choice; a value already given under the new name is
+the one kept. A setting not chosen (only commented out) is left to
+config_add_missing, which writes it at its default. Returns the new text,
+or NULL if there was nothing to change */
+static char *config_forward_renamed(const char *text, toml_datum_t table)
+{
+	char *result = NULL;
+	size_t renamed;
+
+	for (renamed = 0; renamed < NUMBER_OF_CONFIG_RENAMED; renamed++)
+	{
+		const char *source = result ? result : text;
+		const char *old_name = config_renamed[renamed].old_name;
+		const char *old_dot = strchr(old_name, '.');
+		long index = config_setting_index(config_renamed[renamed].name);
+		const struct config_setting *setting;
+		struct config_text out = { NULL, 0, 0 };
+		struct config_text block = { NULL, 0, 0 };
+		const char *line;
+		const char **starts;
+		unsigned char *drop;
+		size_t count = 0, capacity = 0, line_index, value_line = (size_t)-1, found = 0;
+		char section[64], current[64] = "", value[256] = "";
+		int forward;
+
+		if (index < 0 || !old_dot)
+			continue;
+		setting = &config_settings[index];
+		forward = toml_seek(table, old_name).type != TOML_UNKNOWN &&
+			toml_seek(table, setting->name).type == TOML_UNKNOWN;
+		snprintf(section, sizeof(section), "%.*s", (int)(old_dot - old_name), old_name);
+		for (line = source; *line; line += strcspn(line, "\n") + (line[strcspn(line, "\n")] ? 1 : 0))
+			capacity++;
+		starts = malloc((capacity + 1) * sizeof(*starts));
+		drop = calloc(capacity + 1, 1);
+		if (!starts || !drop)
+		{
+			free(starts);
+			free(drop);
+			continue;
+		}
+		for (line = source; *line; line += strcspn(line, "\n") + (line[strcspn(line, "\n")] ? 1 : 0))
+			starts[count++] = line;
+		starts[count] = line;
+		for (line_index = 0; line_index < count; line_index++)
+		{
+			const char *start = starts[line_index];
+			const char *end = start + strcspn(start, "\n");
+			int is_value;
+
+			if (config_line_section(start, end, current, sizeof(current)))
+				continue;
+			is_value = config_line_key(start, end, old_dot + 1);
+			if (strcmp(current, section) || (!is_value && !config_line_commented_key(start, end, old_dot + 1)))
+				continue;
+			{
+				size_t back = line_index;
+
+				drop[line_index] = 1;
+				found++;
+				while (back > 0 && config_line_comment(starts[back - 1], starts[back - 1] + strcspn(starts[back - 1], "\n")))
+					drop[--back] = 1;
+				if (back > 0 && config_line_blank(starts[back - 1], starts[back - 1] + strcspn(starts[back - 1], "\n")))
+					drop[back - 1] = 1;
+			}
+			/* (the value as the player wrote it) */
+			if (is_value && value_line == (size_t)-1)
+			{
+				const char *text_start = (const char *)memchr(start, '=', (size_t)(end - start)) + 1;
+				const char *text_end = end;
+
+				while (text_start < text_end && (*text_start == ' ' || *text_start == '\t'))
+					text_start++;
+				while (text_end > text_start && (text_end[-1] == ' ' || text_end[-1] == '\t' || text_end[-1] == '\r'))
+					text_end--;
+				if ((size_t)(text_end - text_start) < sizeof(value))
+				{
+					memcpy(value, text_start, (size_t)(text_end - text_start));
+					value[text_end - text_start] = 0;
+					value_line = line_index;
+				}
+			}
+		}
+		if (forward && value_line != (size_t)-1)
+		{
+			char buffer[320];
+			size_t last;
+
+			/* the new setting's lines, its key taken out of its comment */
+			config_append_setting(&block, setting);
+			if (block.buffer)
+			{
+				for (last = block.length - 1; last > 0 && block.buffer[last - 1] != '\n'; last--)
+					;
+				block.buffer[last] = 0;
+				block.length = last;
+				snprintf(buffer, sizeof(buffer), "%s = %s\n", strchr(setting->name, '.') + 1, value);
+				config_append(&block, buffer);
+			}
+		}
+		if (found)
+		{
+			for (line_index = 0; line_index < count; line_index++)
+			{
+				if (line_index == value_line && block.buffer)
+					config_append(&out, block.buffer);
+				if (!drop[line_index])
+				{
+					char *copy = config_copy(starts[line_index], (size_t)(starts[line_index + 1] - starts[line_index]));
+
+					if (copy)
+						config_append(&out, copy);
+					free(copy);
+				}
+			}
+			if (out.buffer)
+			{
+				free(result);
+				result = out.buffer;
+				if (block.buffer)
+					platform_log("settings: %s = %s goes on as %s", old_name, value, setting->name);
+				else
+					platform_log("settings: %s (an older version's) taken out of config.toml", old_name);
+			}
+		}
+		free(block.buffer);
+		free(starts);
+		free(drop);
+	}
+	return result;
+}
+
 /* ---------- words */
 
 /* the settings that take one of a few words: one in any case is taken (as
@@ -2539,6 +2791,29 @@ static void config_load(void)
 					{
 						toml_free(followed_result);
 						free(followed);
+					}
+				}
+			}
+			{
+				/* (a value under a setting's older name, forwarded) */
+				char *forwarded = config_forward_renamed(text, result.toptab);
+				toml_result_t forwarded_result;
+
+				if (forwarded)
+				{
+					forwarded_result = toml_parse(forwarded, (int)strlen(forwarded));
+					if (forwarded_result.ok)
+					{
+						toml_free(result);
+						free(text);
+						result = forwarded_result;
+						text = forwarded;
+						updated = text;
+					}
+					else
+					{
+						toml_free(forwarded_result);
+						free(forwarded);
 					}
 				}
 			}
