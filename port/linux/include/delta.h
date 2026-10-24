@@ -210,8 +210,13 @@ legacy table's "platform_policy" section is to tune them without a release
 legacy table (port/linux/src/delta.c; docs/delta.md, "The legacy table as
 config") has a row of OpenCE numbers for each wire, which CI adds to only
 after a cross-play test of that wire; a build reads its own wire's row alone.
-Give each release that changes what the machines send a new one. */
-#define DELTA_WIRE "chupa-32a"
+Give each release that changes what the machines send a new one, and each
+build that learns a legacy layout or behavior (a newer DELTA_LEGACY_NEWEST):
+a row widens every build of its wire, so a wire's builds must all play the
+same OpenCE versions (docs/delta.md, "When the wire changes"). chupa-38a:
+0.8.0e and the Xbox build of 2026-10-21 said chupa-32a and play 32 (33's one
+bit is the host's), 0.8.0f and 0.8.0g said it too and play to 38. */
+#define DELTA_WIRE "chupa-38a"
 
 /* Wire compatibility ranges: the oldest wire each one plays the game with,
 without a desync and without losing what the older wire has (a feature the
@@ -226,28 +231,56 @@ as released clients compare it for an exact match (delta_compat.h). */
 #define DELTA_WIRE_FIRST_ADVERTISED "chupa-29a"
 #define DELTA_WIRE_COMPATIBILITY(X) \
 	X("chupa-29a", "chupa-28a") /* maps by their own names: 29 also takes 28's hashed names and checksums */ \
-	X("chupa-32a", "chupa-28a") /* 30 to 32 are additive; a host of 32 plays with 28 to 31 (docs/delta.md) */
+	X("chupa-32a", "chupa-28a") /* 30 to 32 are additive; a host of 32 plays with 28 to 31 (docs/delta.md) */ \
+	X("chupa-38a", "chupa-28a") /* 33 to 38 played by the host's number; a host announcing 32 plays as chupa-32a's */
 
-/* how many OpenCE numbers past the one announced (the newest this build, or
-the signed table, has proven) are presumed additive: a client joins their
-hosts from the day OpenCE raises, before a table follows. The built-in
-maximum (HALO_PORT_NETWORK_VERSION_MAXIMUM) is at least the built-in number
+/* Each wire's newest OpenCE network version that every build of it plays by
+its own rules (DELTA_LEGACY_NEWEST when it was made): the most a signed
+table's row may widen that wire's builds to safely, without layouts. A row is
+added with the wire and never changed (tools/test_delta.py holds the released
+ones); DELTA_WIRE's is DELTA_LEGACY_NEWEST, so a build that learns a newer
+version's rules has a new wire. */
+#define DELTA_WIRE_LEGACY_NEWEST(X) \
+	X("chupa-28a", 28) \
+	X("chupa-29a", 29) \
+	X("chupa-32a", 33) \
+	X("chupa-38a", 38)
+
+/* how many OpenCE numbers past the newest this build knows (the table
+below, and the one announced, the newest this build or the signed table has
+proven as a host) are presumed additive: a client joins their hosts from the
+day OpenCE raises, before a table follows. The built-in maximum
+(HALO_PORT_NETWORK_VERSION_MAXIMUM) is at least the table's newest version
 plus this (tools/test_delta.py), and a signed table's row at least its
-announce plus this (delta.c). Such a host's game is played as an additive
+announce plus this, and never below the built-in maximum (delta.c). Such a host's game is played as an additive
 raise is: what the client does not know it drops, and content it can't
 match (a map of another version) ends its join rather than playing on. A
 raise that changes an existing message is breaking: a release follows it
 (docs/delta.md, "The legacy number"). */
 #define DELTA_LEGACY_PRESUMED 1
 
+/* the newest OpenCE network version whose rules this build plays as a
+client (DELTA_LEGACY_VERSIONS' newest row: tools/test_delta.py). A Delta
+client says it in its HELLO, and a host goes by it, with the number it
+announces, for what that client reads: the game settings record of 35's
+layout, and whether it reports a static target's own damage
+(network_rules_host_settings_size). Builds before it said their
+HALO_PORT_NETWORK_VERSION there, 32 or older. */
+#define DELTA_LEGACY_NEWEST 38
+
 /* OpenCE's network versions (HALO_PORT_NETWORK_VERSION in its builds), the
 first of its releases with each, and whether the version's change is one the
 version before plays multiplayer with as it is (additive: messages a machine
-of the older version drops) or not (breaking). OpenCE's clients join only
-hosts of their exact version; ours join every version back to the newest
-breaking one (HALO_PORT_NETWORK_VERSION_MINIMUM), and our hosts announce the
-newest (HALO_PORT_NETWORK_VERSION). One row a version, oldest first; the
-command repository's watch adds a row when it follows OpenCE's raise
+of the older version drops) or not (breaking). A change this build plays
+both sides of, by the host's number (35's longer settings record), is
+additive here, and its row says what a machine of the older version can't
+read. OpenCE's clients join only hosts of their exact version; ours join
+every version back to the newest breaking one
+(HALO_PORT_NETWORK_VERSION_MINIMUM), and our hosts announce the newest they
+play as OpenCE's hosts do (HALO_PORT_NETWORK_VERSION, which may be older
+than the newest row: a client plays by its host's version,
+network_rules_of_version, before our hosts do). One row a version, oldest
+first; the command repository's watch adds a row when it follows OpenCE's raise
 (tools/follow.py there). Versions 1 to 9 each changed the wire format
 (port/linux/NETCODE.md, "Versions"). */
 #define DELTA_LEGACY_VERSIONS(X) \
@@ -273,7 +306,13 @@ command repository's watch adds a row when it follows OpenCE's raise
 	X(29, "build-206", additive) /* a Custom Edition map by its own name, its hash's first 32 bits its version in the game record (a client of 29 also takes 28's hashed names and header checksums; wire chupa-29a) */ \
 	X(30, "build-206", additive) /* elevator riders carried by the tick's own movement, a host takes only the across of a client's word on a unit riding an elevator (moving, or stood on at rest), a client discards the height of a correction on its elevator up to 4.0 */ \
 	X(31, "build-206", additive) /* the pregame keep-alive's fourth byte pair sent as zero and the packet table's field lists on their own messages, datagrams stamped more than 450 ticks from the sender's latest dropped, client_ready, client_identity and hit reports taken from a stream alone, a second game on one computer (its own port) */ \
-	X(32, "build-244", additive) /* the host's policy on aiming assist for the mouse and keyboard (message 90), a client's input saying whether its player plays co-op without friendly fire (wire chupa-32a) */
+	X(32, "build-244", additive) /* the host's policy on aiming assist for the mouse and keyboard (message 90), a client's input saying whether its player plays co-op without friendly fire (wire chupa-32a) */ \
+	X(33, "build-266", additive) /* co-op's second switch in the settings' co-op byte (bit 1: the players' hits spare their AI allies), the host's to act on; in no release of OpenCE's, its testing builds alone */ \
+	X(34, "build-266", additive) /* no message changed: scenery and devices that are a shield alone are static targets too, every machine runs static targets' shields, a client reports no damage a static target deals, a static target's copy made during play found by the nearest; in no release */ \
+	X(35, "build-266", additive) /* OpenCE's own game types (SWAT, Infection, Gun Game, Hardcore): the gametype's options 0x2C bytes, the settings record 16 bytes longer, which a machine of 34 cannot read; this build reads both, by the host's number, and leaves a game of one it does not play; in no release */ \
+	X(36, "build-266", additive) /* the host's shield effects, a new message (91) a machine of 35 drops */ \
+	X(37, "build-268", additive) /* a listed game's kind (an OpenCE game type and Hardcore) in a byte that was zero: the advertisement's fourth reserved byte and the internet listing's stamp; this build shows the name in the list and marks the games it does not play; no message or record changed */ \
+	X(38, "build-268", additive) /* the shield effects message takes a seventh value, 6, for each machine's own look; this build draws stock for it, as for the others */
 
 /* ---------- the legacy table (port/linux/src/delta.c)
 
@@ -309,6 +348,39 @@ int delta_legacy_override(void);
 and sends them to other machines): not with a local table in use, nor
 without a key to check one with */
 int delta_legacy_relay(void);
+
+/* ---------- layouts: the table's facts about newer OpenCE versions
+
+A wire from chupa-38a on reads "layouts" in its row: for a network version,
+the facts a host of it sends that this build reads by data, not code (the
+game settings record's size, the gametype's options' length, the distributed
+messages a machine that does not know them drops, the shield effects
+message's largest value; docs/delta.md, "Layouts"). A fact holds for its
+version and every later one until the next fact, and is used only for
+versions past DELTA_LEGACY_NEWEST (the build's own rules are the built-in
+facts) and only within the limits network_rules.c sets (port/linux/game/
+network_rules.h): a fact past them is not taken. Plain numbers, 0 for a fact
+not said. */
+#define DELTA_LAYOUT_FACTS 16
+#define DELTA_LAYOUT_KIND_BYTES 32
+struct delta_layout_fact
+{
+	unsigned short version;
+	/* the game settings record's bytes at the network's 128 machines and
+	128 players, and the gametype's options' bytes in it */
+	unsigned short settings_size;
+	unsigned short options_size;
+	/* the largest value the shield effects message (91) takes */
+	unsigned short shield_effects_maximum;
+	/* the distributed message kinds a host of the version sends that a
+	machine that does not know them drops: a bit a kind (kind 8 is bit 0 of
+	byte 1) */
+	unsigned char dropped[DELTA_LAYOUT_KIND_BYTES];
+};
+
+/* the table in use's facts for this build's wire (its own row's, or the
+local override's), oldest first, into facts (at most count): how many */
+int delta_legacy_layouts(struct delta_layout_fact *facts, int count);
 
 /* the largest document, and signed table */
 #define DELTA_LEGACY_DOCUMENT_SIZE 16384

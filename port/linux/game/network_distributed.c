@@ -3237,6 +3237,75 @@ boolean network_aim_assist_blocked(
 		distributed_aim_assist_setting(), distributed_aim_assist_blocked_by_host);
 }
 
+boolean network_rules_of_version(
+	unsigned int version)
+{
+	unsigned int host;
+
+	/* (a host, or a game of this machine's own: by the number it announces,
+	the built-in one or a legacy table's, which its OpenCE machines are of) */
+	if (game_connection() != _game_connection_network_client)
+		return (unsigned int)delta_legacy_announce() >= version;
+	host = network_game_client_host_network_version();
+	return host != NETWORK_RULES_VERSION_UNKNOWN && host >= version;
+}
+
+/* a client: the host's shield effects, as it last said (message 91), stock
+at the start of every game. They are its choice of how every machine draws
+players' shields, for fairness; this build has no glow or light show of its
+own and draws stock, which a stock host's game is exactly, and the others
+differ from only in their look. 6 (version 38) leaves each machine its own
+player's look; this build has no look of its own to choose, so it draws stock
+for it too. */
+static short distributed_shield_effects = 0;
+/* (whether the host has said them this game, for the log) */
+static boolean distributed_shield_effects_heard = FALSE;
+
+short network_shield_effects(
+	void)
+{
+	return distributed_shield_effects;
+}
+
+/* the distributed message kinds this game has seen that this build does not
+know, a bit a kind (each said in the log once a game) */
+static byte distributed_unknown_kinds_seen[32];
+
+/* whether this build knows a distributed message's kind (network_distributed.h) */
+static boolean distributed_kind_known(
+	byte type)
+{
+	return (type >= _distributed_message_player_prediction && type <= _distributed_message_pings) ||
+		(type >= _distributed_message_actor_states && type <= _distributed_message_coop_device_states) ||
+		(type >= _distributed_message_chat_up && type < NUMBER_OF_DISTRIBUTED_MESSAGES);
+}
+
+/* a message of a kind this build does not know, from the host (machine_index
+NONE) or a client: dropped, as ever. A kind the layout of the sender's
+version lists (network_rules.h: built in, or a signed legacy table's facts)
+is one such a machine sends that a machine without it drops; another is said
+in the log, once a game, as the sign of a newer host's change this build and
+its table do not know. */
+static void distributed_unknown_kind(
+	long machine_index,
+	byte type)
+{
+	struct network_rules_layout layout;
+	unsigned int version = machine_index == NONE ? network_game_client_host_network_version() :
+		(unsigned int)delta_legacy_announce();
+
+	if (distributed_unknown_kinds_seen[type >> 3] & (1 << (type & 7)))
+		return;
+	distributed_unknown_kinds_seen[type >> 3] |= (byte)(1 << (type & 7));
+	network_rules_layout(version, &layout);
+	if (!network_rules_layout_drops(&layout, type))
+	{
+		error(_error_log, "network: dropped a distributed message of kind %d from %s (network version %u), which "
+			"this build does not know and its legacy table's layouts do not list", (int)type,
+			machine_index == NONE ? "the host" : "a client", version);
+	}
+}
+
 /* (the host) the setting to one client machine, or to every client (NONE) */
 static void distributed_send_aim_assist(
 	long machine_index)
@@ -3533,6 +3602,9 @@ void network_distributed_new_game(
 		network_game_client_host_network_version() != 0xFFFF &&
 		network_game_client_host_network_version() >= AIM_ASSIST_POLICY_NETWORK_VERSION;
 	distributed_aim_assist_sent = NONE;
+	distributed_shield_effects = 0;
+	distributed_shield_effects_heard = FALSE;
+	csmemset(distributed_unknown_kinds_seen, 0, sizeof(distributed_unknown_kinds_seen));
 	distributed_statistics_due = FALSE;
 	distributed_pickup_count = 0;
 	/* (each player's latest input: player_queues_new.c) */
@@ -4464,6 +4536,12 @@ void network_distributed_handle_message(
 		}
 		return;
 	}
+	/* (a kind this build does not know: dropped before anything reads it) */
+	if (!distributed_kind_known(header.type))
+	{
+		distributed_unknown_kind(machine_index, header.type);
+		return;
+	}
 	/* (entries of a size of their own: their least here, and each read no
 	further than the message's end) */
 	switch (header.type)
@@ -4487,6 +4565,7 @@ void network_distributed_handle_message(
 	case _distributed_message_coop_device_states: entry_size = network_coop_device_state_entry_size(); break;
 	case _distributed_message_pickups: entry_size = sizeof(struct distributed_pickup); break;
 	case _distributed_message_aim_assist_policy: entry_size = NETWORK_RULES_AIM_ASSIST_SIZE - sizeof(header); break;
+	case _distributed_message_shield_effects: entry_size = NETWORK_RULES_SHIELD_EFFECTS_SIZE - sizeof(header); break;
 	case _distributed_message_chat_up:
 	case _distributed_message_chat_down: entry_size = DELTA_CHAT_BRIDGE_LINE_SIZE; break;
 	case _distributed_message_chat_config: entry_size = DELTA_CHAT_BRIDGE_CONFIG_SIZE; break;
@@ -4828,6 +4907,37 @@ void network_distributed_handle_message(
 		}
 		break;
 	}
+	case _distributed_message_shield_effects:
+	{
+		/* the host's shield effects: as the aim assist policy, reliably, of
+		exactly the size, not from a datagram, up to the largest value of the
+		host's version's layout (built in, or a signed legacy table's);
+		anything else is dropped. A host takes none. */
+		struct network_rules_layout layout;
+		int effects;
+#ifdef HALO_BIG_ENDIAN
+		byte choice[NETWORK_RULES_SHIELD_EFFECTS_SIZE];
+
+		if (size == sizeof(choice))
+		{
+			csmemcpy(choice, message, sizeof(choice));
+			distributed_wire_swap(choice, 1, sizeof(message_header));
+			message = (word const *)choice;
+		}
+#endif
+
+		network_rules_layout(network_game_client_host_network_version(), &layout);
+		if (machine_index == NONE && game_connection() == _game_connection_network_client &&
+			network_rules_shield_effects_read((byte const *)message, size, network_connection_last_read_was_unreliable(),
+				layout.shield_effects_maximum, &effects))
+		{
+			if (effects != distributed_shield_effects || !distributed_shield_effects_heard)
+				error(_error_log, "the host's shield effects are %d (drawn as stock, as this build has no other)", effects);
+			distributed_shield_effects = (short)effects;
+			distributed_shield_effects_heard = TRUE;
+		}
+		break;
+	}
 	case _distributed_message_pickups:
 	{
 		/* what the host says this machine's players picked up */
@@ -4987,6 +5097,7 @@ static boolean distributed_wire_entries(
 	case _distributed_message_objects_synchronized:
 	/* (network_rules.c's, written and read as the wire has it) */
 	case _distributed_message_aim_assist_policy:
+	case _distributed_message_shield_effects:
 		return TRUE;
 	}
 	return FALSE;

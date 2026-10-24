@@ -107,6 +107,9 @@ struct browser_game
 	another map, or a host that doesn't) */
 	char map_title[48];
 	char map_pack[48];
+	/* the kind its public listing says (p2p_listing's; 0 when it has none
+	or isn't heard): OpenCE's game types and Hardcore, by name in the list */
+	unsigned char kind;
 };
 
 /* one player's line of a finished game's carnage report */
@@ -204,6 +207,9 @@ int browser_get_games(struct browser_game *games, int maximum_count);
 /* whether this build can join a game by its network version: 0 if it can
 (or may try), -1 if the game runs an older version, 1 a newer one */
 int browser_game_version_state(const struct browser_game *game);
+/* the same for a bare network version (a listing over the brokers has no
+game list entry): -1 older, 1 newer, 0 joinable. Every build */
+int browser_version_state(int version);
 /* whether a game's map (a scenario's name or path) is a campaign level: a
 co-op game, which no server browser lists (a direct join or an invite still
 reaches it) */

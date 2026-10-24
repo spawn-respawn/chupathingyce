@@ -50,6 +50,9 @@ main menu shows next (ui_widget.c; the game's 16-bit wchar_t) */
 char *main_get_multiplayer_map_name(void);
 void network_game_abort(void);
 void display_error_text_when_main_menu_loaded(const unsigned short *text);
+/* the newest network version whose layout this build reads (port/linux/game/
+network_rules.c) */
+unsigned network_rules_layout_newest(void);
 
 enum
 {
@@ -429,7 +432,11 @@ int delta_peer_protocol(void)
 		local.capabilities |= (delta_u32)1 << _delta_capability_bomb_movement;
 		local.capabilities |= (delta_u32)1 << _delta_capability_bomb_traits;
 #endif
-		local.legacy_version = HALO_PORT_NETWORK_VERSION;
+		/* (the newest network version whose rules it plays as a client: a
+		host sends it the settings record of that version's layout, by the
+		number the host announces; past DELTA_LEGACY_NEWEST, a signed legacy
+		table's layouts' newest) */
+		local.legacy_version = network_rules_layout_newest();
 		delta_peer_local_key(&local.key);
 #ifdef HALO_XBOX_CONSOLE
 		snprintf(local.build, sizeof(local.build), "Warthog %s", HALO_VERSION);
@@ -888,6 +895,13 @@ int delta_peer_game_machine_pending(int machine_index)
 	if (delta_peer_protocol() == _delta_peer_protocol_opence || delta_game.role != _role_host || !delta_game.port)
 		return 0;
 	return delta_peer_machine_pending(&delta_game.peer, GetTickCount(), machine_index);
+}
+
+int delta_peer_game_machine_legacy_version(int machine_index)
+{
+	if (delta_peer_protocol() == _delta_peer_protocol_opence || delta_game.role != _role_host || !delta_game.port)
+		return 0;
+	return delta_peer_machine_legacy_version(&delta_game.peer, machine_index);
 }
 
 int delta_peer_game_room_has(int capability)

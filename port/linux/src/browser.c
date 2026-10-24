@@ -2564,14 +2564,14 @@ static void add_known(struct browser_game *games, int count)
 			}
 		}
 		games[index].locked = 0;
+		games[index].kind = 0;
 		for (other = 0; other < listing_count; other++)
 		{
-			if (!listings[other].locked)
-				continue;
 			p2p_hex(listings[other].key_hash, P2P_KEY_HASH_SIZE, key_hash);
 			if (!SDL_strncasecmp(key_hash, games[index].invite, 2 * P2P_KEY_HASH_SIZE))
 			{
-				games[index].locked = 1;
+				games[index].locked = listings[other].locked;
+				games[index].kind = listings[other].kind;
 				break;
 			}
 		}
@@ -2621,6 +2621,13 @@ int browser_map_is_campaign(const char *map)
 	return 0;
 }
 
+int browser_version_state(int version)
+{
+	if (version < delta_legacy_minimum())
+		return -1;
+	return version > delta_legacy_maximum() ? 1 : 0;
+}
+
 #ifdef HALO_GAME_BROWSER
 
 int browser_game_version_state(const struct browser_game *game)
@@ -2628,9 +2635,7 @@ int browser_game_version_state(const struct browser_game *game)
 	/* (a Delta host's other number may still be joined, as above) */
 	if (game->protocol == BROWSER_PROTOCOL_DELTA && delta_peer_protocol() != _delta_peer_protocol_opence)
 		return 0;
-	if (game->version < delta_legacy_minimum())
-		return -1;
-	return game->version > delta_legacy_maximum() ? 1 : 0;
+	return browser_version_state(game->version);
 }
 
 int browser_get_games(struct browser_game *games, int maximum_count)
