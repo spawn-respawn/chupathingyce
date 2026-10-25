@@ -1,0 +1,201 @@
+{
+  "schema": 1,
+  "feature": "infection",
+  "source": {
+    "repository": "OpenCommunityEdition/OpenCE",
+    "files": {
+      "port/linux/game/infection.c": {
+        "base_blob": "344e1d5faca2f28d51a6eec3b12cd8d5b356ed0a",
+        "integration": "adapted",
+        "local": "source/features/infection/infection.c",
+        "notes": "infection.c taken from the FractumSeraph merge (0.8.0h base); options read from game_variant_extended_options; hooks in units/weapons/objects/players/game_engine/network_damage as cfb212fed"
+      },
+      "port/linux/game/infection.h": {
+        "base_blob": "48bb18114f9af56d56d206e6dda171af40e72949",
+        "integration": "adapted",
+        "local": "source/features/infection/infection.h",
+        "notes": "infection.c taken from the FractumSeraph merge (0.8.0h base); options read from game_variant_extended_options; hooks in units/weapons/objects/players/game_engine/network_damage as cfb212fed"
+      },
+      "port/linux/game/network_infection.h": {
+        "base_blob": "9aa3190231135afb736902ab3c5314372c8503ce",
+        "integration": "adapted",
+        "local": "source/features/infection/network_infection.h",
+        "notes": "infection.c taken from the FractumSeraph merge (0.8.0h base); options read from game_variant_extended_options; hooks in units/weapons/objects/players/game_engine/network_damage as cfb212fed"
+      }
+    }
+  },
+  "contract": {
+    "settings_layout": "opence_extended_options_v35",
+    "options_bytes": "0x1C..0x2B of game_variant_options",
+    "mode_byte_offset": "0x1C",
+    "legacy_clients": "refuse admission (network_rules_host_takes_game_type); never downgrade to Slayer",
+    "base_engine": "slayer",
+    "teams": true,
+    "mode": 2,
+    "option_offsets": {
+      "first_zombies": "0x1E",
+      "zombie_speed": "0x1F",
+      "skull_damage": "0x20",
+      "zombie_respawn": "0x21",
+      "countdown": "0x22",
+      "zombie_shields": "0x23"
+    },
+    "state_replication": "network_infection.h messages (stateful: full and incremental snapshots)",
+    "authority": "host",
+    "status_note": "rewritten as an extension (a ruleset or general hooks): the engine reaches it only through extension_api.h",
+    "host_selection": "config infection.host (+ infection.* options), team Slayer only",
+    "state_validator": "source/features/infection/infection_state.h, tested by tools/tests/compat/infection_state_test.c",
+    "menus": "OPENCE bank of Select Gametype lists the built-in gametypes (game_modes.c); options screen not brought over (config <mode>.* settings instead)"
+  },
+  "watch": [
+    {
+      "path": "port/linux/game/game_modes.c",
+      "base_blob": "5dd330490efb93259f7de4b4c92d36dd851aacd9"
+    },
+    {
+      "path": "source/game/game_engine.c",
+      "base_blob": "1c2fcc02aa4d4a74b31abf6a0ddfb5d41400842a"
+    },
+    {
+      "path": "source/game/game_engine.h",
+      "base_blob": "84eaa4eb5773d468f06b3342103a30afe4da95b3"
+    },
+    {
+      "path": "source/game/game_engine_slayer.c",
+      "base_blob": "644781093a519b7fda34d37483c8554a4d2bf31a"
+    },
+    {
+      "path": "source/game/game_engine_slayer.h",
+      "base_blob": "e03e1ffc4b93b664fccf4c9c64b5b1a5ffbad327"
+    },
+    {
+      "path": "source/objects/damage.c",
+      "base_blob": "fcbfef07f36e80c7f2368ea1c036e9a584b7ae8b"
+    },
+    {
+      "path": "source/networking/network_game_manager.c",
+      "base_blob": "0bff82a240250c73ea477bc8134977c9b1bde3d6"
+    },
+    {
+      "path": "port/linux/game/network_rules.c",
+      "repo": "local",
+      "base_blob": "62aad9e41e46b71b7f344532d1b24f5b1cb6de0d"
+    },
+    {
+      "path": "port/linux/game/network_rules.h",
+      "repo": "local",
+      "base_blob": "76eddacd7aafad8cbc74c225022f2669f09ec6b3"
+    },
+    {
+      "path": "source/game/players.c",
+      "repo": "local",
+      "base_blob": "358046b456eadeebba6464833873bb00dbf21fe6"
+    },
+    {
+      "path": "source/units/units.c",
+      "repo": "local",
+      "base_blob": "b663e529516f29be04429f50f40c75a2467d01bb"
+    },
+    {
+      "path": "source/items/weapons.c",
+      "repo": "local",
+      "base_blob": "a21b206f3511a0ff28aa010e4451aa7d7f3b03eb"
+    },
+    {
+      "path": "source/objects/objects.c",
+      "repo": "local",
+      "base_blob": "ed702d168c5a77c11a6e47f3548f52d8ec246272"
+    },
+    {
+      "path": "source/game/aim_assist.c",
+      "repo": "local",
+      "base_blob": "7eeec89c27413c5cb130a419678362379417c4d5"
+    },
+    {
+      "path": "port/linux/game/network_damage.c",
+      "repo": "local",
+      "base_blob": "550495119af720121e958594ec54c287cfd3516b"
+    },
+    {
+      "path": "source/extensions/extension_api.h",
+      "repo": "local",
+      "base_blob": "6da25dc3e91b1d4a854dc6e4584f0ce7d8e8d7c2"
+    },
+    {
+      "path": "source/extensions/extension_dispatch.c",
+      "repo": "local",
+      "base_blob": "ea78741bca6f5362622903868060d54577dcc05d"
+    },
+    {
+      "path": "source/networking/network_server_message_handler.c",
+      "repo": "local",
+      "base_blob": "388825aef65c71eb3784695d6b5e8a23dbd9172a"
+    },
+    {
+      "path": "source/networking/network_client_message_handler.c",
+      "repo": "local",
+      "base_blob": "2c5d1bb6107cbccb40012aea3e046f7496bd1bf1"
+    },
+    {
+      "path": "source/networking/network_server_manager.c",
+      "repo": "local",
+      "base_blob": "a1304f858411b85a0dde48515550e03608b37925"
+    },
+    {
+      "path": "source/saved games/playlist_profile.c",
+      "repo": "local",
+      "base_blob": "ddf68387d003a3c9c9218f89bebf78a8f893e82f"
+    }
+  ],
+  "verification": {
+    "status": "contract_verified",
+    "required": [
+      "infection_wire_vectors",
+      "infection_snapshot_malformed",
+      "infection_integration",
+      "infection_rules",
+      "infection_host_crossplay",
+      "infection_client_crossplay"
+    ],
+    "tests": {
+      "infection_wire_vectors": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "vector or offsets",
+        "what": "OpenCE's 16 option bytes at 0x1C..0x2B: mode, order, melee, Hardcore, sanitizing, engine/teams rules"
+      },
+      "infection_integration": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "integration_points or engine_does_not_name or kind_is_advertised or keeps_slayer or stock_default",
+        "what": "the engine's hooks and OPENCE menu wiring exist; stock profiles unchanged"
+      },
+      "infection_rules": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "test_mode_rules and infection",
+        "what": "the mode's rules as decisions on plain numbers: round result, first zombies, kills and infection, clock, winners, skull melee, zombie speed, state validation"
+      },
+      "infection_host_crossplay": {
+        "kind": "manual",
+        "what": "this build hosts, an OpenCE client plays a match"
+      },
+      "infection_client_crossplay": {
+        "kind": "manual",
+        "what": "an OpenCE host, this build joins and plays a match"
+      },
+      "infection_snapshot_malformed": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "infection_state",
+        "what": "the host's state as a client takes it: full, incremental, stale, duplicate, malformed"
+      }
+    },
+    "passed": [
+      "infection_wire_vectors",
+      "infection_snapshot_malformed",
+      "infection_integration",
+      "infection_rules"
+    ]
+  }
+}
