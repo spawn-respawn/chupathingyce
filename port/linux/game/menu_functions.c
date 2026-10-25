@@ -3158,6 +3158,9 @@ static struct
 	short gametype_count;
 	/* (those of the bank the list's spinner shows: STANDARD, CUSTOM) */
 	short bank[MAXIMUM_GAMETYPES], bank_count, bank_shown;
+	/* (each gametype's bank and OpenCE options, read once with the list: the
+	rows are drawn every frame, a file read each would not do) */
+	unsigned char gametype_bank[MAXIMUM_GAMETYPES], gametype_extended[MAXIMUM_GAMETYPES][16];
 	short gametype_first, gametype_chosen;
 	/* the server settings */
 	wchar_t game_name[16];
@@ -3510,13 +3513,10 @@ OPENCE: OpenCE's built-in ones, CUSTOM: those saved) in its first row, then
 the bank's gametypes */
 
 /* a gametype's kind for its rules text ("INFECTION", "HARDCORE CTF"), else its game engine's name */
-static wchar_t const *gametype_kind_or_engine(long profile_index, struct game_variant const *variant)
+static wchar_t const *gametype_kind_or_engine(short gametype, struct game_variant const *variant)
 {
-	unsigned char extended[16];
-	wchar_t const *kind;
+	wchar_t const *kind = game_modes_variant_kind_name(variant, multiplayer.gametype_extended[gametype]);
 
-	playlist_profile_get_extended_options(profile_index, extended);
-	kind = game_modes_variant_kind_name(variant, extended);
 	return kind ? kind : engine_names[PIN(variant->game_engine_index, 0, (long)NUMBEROF(engine_names) - 1)];
 }
 
@@ -3524,13 +3524,10 @@ enum { GAMETYPE_BANK_STANDARD = 0, GAMETYPE_BANK_OPENCE, GAMETYPE_BANK_CUSTOM };
 
 /* the bank a gametype is in: a built-in one whose OpenCE options say a mode
 or Hardcore is OpenCE's */
-static short gametype_bank_of(long profile_index)
+static short gametype_bank_of(long profile_index, unsigned char const *extended)
 {
-	unsigned char extended[16];
-
 	if (!((unsigned long)profile_index & PLAYLIST_READ_ONLY_BIT))
 		return GAMETYPE_BANK_CUSTOM;
-	playlist_profile_get_extended_options(profile_index, extended);
 	return extended[0] || extended[1] ? GAMETYPE_BANK_OPENCE : GAMETYPE_BANK_STANDARD;
 }
 
@@ -3542,7 +3539,7 @@ static void gametype_bank_read(short bank)
 	multiplayer.bank_count = 0;
 	for (index = 0; index < multiplayer.gametype_count; index++)
 	{
-		if (gametype_bank_of(multiplayer.gametypes[index]) == bank)
+		if (multiplayer.gametype_bank[index] == bank)
 			multiplayer.bank[multiplayer.bank_count++] = index;
 	}
 	multiplayer.gametype_first = 0;
@@ -3556,8 +3553,13 @@ static boolean gametype_list_initialize(struct widget_instance *list)
 	short last, index;
 
 	multiplayer.gametype_count = ui_widget_port_gametypes(multiplayer.gametypes, MAXIMUM_GAMETYPES, &last);
-	gametype_bank_read(multiplayer.gametype_count ? gametype_bank_of(multiplayer.gametypes[last]) :
-		GAMETYPE_BANK_STANDARD);
+	for (index = 0; index < multiplayer.gametype_count; index++)
+	{
+		playlist_profile_get_extended_options(multiplayer.gametypes[index], multiplayer.gametype_extended[index]);
+		multiplayer.gametype_bank[index] = (unsigned char)gametype_bank_of(multiplayer.gametypes[index],
+			multiplayer.gametype_extended[index]);
+	}
+	gametype_bank_read(multiplayer.gametype_count ? multiplayer.gametype_bank[last] : GAMETYPE_BANK_STANDARD);
 	for (index = 0; index < multiplayer.bank_count; index++)
 	{
 		if (multiplayer.bank[index] == last)
@@ -3660,7 +3662,7 @@ static void gametype_list_update(struct widget_instance *list)
 				widget->animation.current_frame_index = (short)(engine == game_engine_bomb ? game_engine_oddball :
 					engine <= 5 ? engine : 0);
 			usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\nScore to win: %ld",
-				gametype_kind_or_engine(multiplayer.gametypes[multiplayer.bank[multiplayer.gametype_chosen]], &variant),
+				gametype_kind_or_engine(multiplayer.bank[multiplayer.gametype_chosen], &variant),
 				variant.universal_variant.teams ? L"Teams" : L"Free for all", variant.universal_variant.score_to_win);
 			text[NUMBEROF(text) - 1] = 0;
 			text_set(named(description, "gametype_right_data", 0), text);
