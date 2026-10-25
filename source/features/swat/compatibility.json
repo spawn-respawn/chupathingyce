@@ -131,7 +131,8 @@
     {
       "path": "source/saved games/playlist_profile.c",
       "repo": "local",
-      "base_blob": "ddf68387d003a3c9c9218f89bebf78a8f893e82f"
+      "base_blob": "ddf68387d003a3c9c9218f89bebf78a8f893e82f",
+      "seen_blob": "7d7afb7a0caf9d2668706990427f1d625a0bf20a"
     }
   ],
   "verification": {
