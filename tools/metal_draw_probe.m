@@ -130,17 +130,20 @@ static uint64_t finish_batch(gpu_texture color, int split)
     frames++;
     const unsigned char *pixels = readback.contents;
     uint64_t digest = 14695981039346656037ull;
+    unsigned colored = 0;
     for (int y = 0; y < PROBE_WIDTH; y++) for (int x = 0; x < PROBE_WIDTH; x++) {
         const unsigned char *p = pixels + (y*PROBE_WIDTH+x)*4;
-        if (split) {
+        if (p[0] || p[1] || p[2]) colored++;
+        if (split > 0) {
             assert(p[0] == (x < PROBE_WIDTH/2 ? 0 : 255));
             assert(p[1] == 0 && p[2] == (x < PROBE_WIDTH/2 ? 255 : 0) && p[3] == 255);
-        } else {
+        } else if (split == 0) {
             assert(p[0] >= 190 && p[0] <= 192 && p[1] >= 127 && p[1] <= 129);
             assert(p[2] >= 63 && p[2] <= 65 && p[3] == 255);
         }
         for (int c = 0; c < 4; c++) digest = (digest ^ p[c]) * 1099511628211ull;
     }
+    if (split < 0) assert(colored != 0);
     return digest;
 }
 
@@ -224,6 +227,241 @@ static void pool_early_return_test(struct gpu_draw draw)
     }
     assert(metal_profile.calls[DRAW_PROFILE_ENCODE] == 1);
     finish_batch(draw.color_target, 0);
+}
+
+/* Match the frontend's rebased stream window with unmodified 16-bit indices.
+Exercise signed vertex_id adjustment in both native and converted primitives. */
+static void indexed_base_vertex_test(struct gpu_draw draw)
+{
+    const uint32_t primitives[] = { GPU_PRIMITIVE_TRIANGLES, GPU_PRIMITIVE_TRIANGLE_STRIP,
+        GPU_PRIMITIVE_TRIANGLE_FAN, GPU_PRIMITIVE_LINE_LOOP, GPU_PRIMITIVE_LINE_STRIP };
+    const int32_t bases[] = { 0, -65533, -32768, 3 };
+    struct gpu_clear clear = { .flags = GPU_CLEAR_COLOR, .color = 0xff000000 };
+    gpu_buffer indices = gpu_metal_buffer_create(8);
+    const float line_vertices[] = { -.75f,-.75f, .75f,-.75f, -.75f,.75f,
+        -.75f,-.75f, .75f,-.75f, -.75f,.75f };
+    gpu_buffer lines = gpu_metal_buffer_create(sizeof(line_vertices));
+    gpu_metal_buffer_write(lines, 0, sizeof(line_vertices), line_vertices, 0);
+    draw.index_buffer = indices;
+    draw.index_offset = 2;
+    draw.streams[0].offset = 0;
+    for (unsigned p = 0; p < sizeof(primitives)/sizeof(primitives[0]); p++) {
+        draw.primitive = primitives[p];
+        if (p >= 3) draw.streams[0].buffer = lines;
+        uint64_t reference = 0;
+        for (unsigned b = 0; b < sizeof(bases)/sizeof(bases[0]); b++) {
+            uint16_t source[] = { 0xffff, 0, 1, 2 };
+            int32_t base = bases[b];
+            /* The frontend rebases strips containing Metal's restart sentinel. */
+            if ((p == 1 || p == 4) && base == -65533) base = 0;
+            for (unsigned i = 1; i < 4; i++)
+                source[i] = (uint16_t)((int32_t)i - 1 - (base < 0 ? base : 0));
+            gpu_metal_buffer_write(indices, 0, sizeof(source), source, 0);
+            draw.base_vertex = base;
+            /* Positive base selects the second identical triangle. */
+            assert(pass_begin(draw.color_target, 0, &clear));
+            assert(probe_submit_draw(&draw));
+            uint64_t digest = finish_batch(draw.color_target, p >= 3 ? -1 : 0);
+            if (!b) reference = digest;
+            else assert(digest == reference);
+        }
+    }
+    [buffers remove:indices];
+    [buffers remove:lines];
+}
+
+static void buffer_cache_assert_accounting(void)
+{
+    NSUInteger bytes = 0;
+    for (id item in buffers->objects) {
+        if (![item isKindOfClass:[MetalBuffer class]]) continue;
+        MetalBuffer *record = item;
+        for (unsigned i = 0; i < BUFFER_RETIRED_MAX; i++)
+            if (record->retired[i]) bytes += buffer_storage_bytes(record->retired[i]);
+    }
+    assert(bytes == buffer_retired_bytes);
+    assert(bytes <= BUFFER_RETIRED_BYTES_MAX);
+    assert(buffer_writes.cache_peak_bytes <= BUFFER_RETIRED_BYTES_MAX);
+}
+
+/* Fill the real global budget across distinct buffers, then test rejection,
+recycling at capacity, record destruction, and a single oversized allocation. */
+static void buffer_cache_budget_test(void)
+{
+    enum { BYTES = 4 * 1024 * 1024, PAGE = 4096,
+        HANDLES = BUFFER_RETIRED_BYTES_MAX / BYTES + 1 };
+    assert(buffer_retired_bytes == 0);
+    @autoreleasepool {
+        gpu_buffer handles[HANDLES];
+        unsigned char patch[PAGE];
+        memset(patch, 23, PAGE);
+        uint64_t skipped = buffer_writes.cache_skipped;
+        for (unsigned i = 0; i < HANDLES; i++) {
+            handles[i] = gpu_metal_buffer_create(BYTES);
+            MetalBuffer *record = buffer_record(handles[i]);
+            memset(record->buffer.contents, 0, BYTES);
+            id<MTLBuffer> old = record->buffer;
+            use_buffer(record);
+            gpu_metal_buffer_write(handles[i], 0, PAGE, patch, 0);
+            assert(record->buffer != old && ((unsigned char *)old.contents)[0] == 0);
+            assert(memcmp(record->buffer.contents, patch, PAGE) == 0);
+            buffer_cache_assert_accounting();
+        }
+        assert(buffer_writes.cache_skipped > skipped);
+        MetalBuffer *record = buffer_record(handles[0]);
+        unsigned slot = 0;
+        for (unsigned i = 0; i < BUFFER_RETIRED_MAX; i++)
+            if (record->retired[i]) { slot = i; break; }
+        assert(record->retired[slot]);
+        NSUInteger before = buffer_retired_bytes;
+        assert(buffer_storage_bytes(record->retired[slot]) == buffer_storage_bytes(record->buffer));
+        record->retired_used[slot] = 0; /* only this version has completed */
+        uint64_t reused = buffer_writes.reused;
+        use_buffer(record);
+        gpu_metal_buffer_write(handles[0], PAGE, PAGE, patch, 0);
+        assert(buffer_writes.reused == reused + 1);
+        assert(buffer_retired_bytes == before);
+        assert(memcmp(record->buffer.contents, patch, PAGE) == 0);
+        assert(memcmp((unsigned char *)record->buffer.contents + PAGE, patch, PAGE) == 0);
+        buffer_cache_assert_accounting();
+        for (unsigned i = 0; i < HANDLES; i++) [buffers remove:handles[i]];
+    }
+    assert(buffer_retired_bytes == 0); /* deallocation returns all charges */
+    @autoreleasepool {
+        gpu_buffer handle = gpu_metal_buffer_create(BUFFER_RETIRED_BYTES_MAX + PAGE);
+        MetalBuffer *record = buffer_record(handle);
+        uint64_t skipped = buffer_writes.cache_skipped;
+        use_buffer(record);
+        assert(buffer_rename(record, 0, record->buffer.length)); /* full overwrite: no copy */
+        assert(buffer_writes.cache_skipped == skipped + 1);
+        assert(buffer_retired_bytes == 0);
+        [buffers remove:handle];
+    }
+    buffer_cache_assert_accounting();
+}
+
+/* GPU blits read both versions after the CPU has updated a page. Repeat over
+completed frames so the real completion serial gates retired-storage reuse. */
+static void buffer_gpu_lifetime_test(void)
+{
+    enum { BYTES = 16384, PAGE = 4096 };
+    gpu_buffer handle = gpu_metal_buffer_create(BYTES);
+    MetalBuffer *record = buffer_record(handle);
+    unsigned char expected[BYTES], patch[PAGE];
+    memset(expected, 17, BYTES);
+    gpu_metal_buffer_write(handle, 0, BYTES, expected, 0);
+    uint64_t reused = buffer_writes.reused;
+    for (unsigned round = 0; round < 4; round++) {
+        unsigned char before[BYTES];
+        memcpy(before, expected, BYTES);
+        id<MTLBuffer> readback = [device newBufferWithLength:BYTES * 2 options:MTLResourceStorageModeShared];
+        assert(readback);
+        pass_end();
+        id<MTLBlitCommandEncoder> blit = [command_buffer() blitCommandEncoder];
+        [blit copyFromBuffer:record->buffer sourceOffset:0 toBuffer:readback destinationOffset:0 size:BYTES];
+        [blit endEncoding];
+        use_buffer(record);
+        memset(patch, (int)round + 40, PAGE);
+        gpu_metal_buffer_write(handle, round * PAGE, PAGE, patch, 0);
+        memcpy(expected + round * PAGE, patch, PAGE);
+        blit = [command_buffer() blitCommandEncoder];
+        [blit copyFromBuffer:record->buffer sourceOffset:0 toBuffer:readback destinationOffset:BYTES size:BYTES];
+        [blit endEncoding];
+        use_buffer(record);
+        commit(YES);
+        [last_committed waitUntilCompleted];
+        dispatch_group_wait(completion_handlers, DISPATCH_TIME_FOREVER);
+        assert(last_committed.status == MTLCommandBufferStatusCompleted);
+        assert(memcmp(readback.contents, before, BYTES) == 0);
+        assert(memcmp((unsigned char *)readback.contents + BYTES, expected, BYTES) == 0);
+    }
+    assert(buffer_writes.reused > reused);
+    [buffers remove:handle];
+}
+
+static void buffer_busy_eviction_test(gpu_buffer handle, unsigned char *expected)
+{
+    enum { BYTES = 4 * 1024 * 1024, PAGE = 4096 };
+    MetalBuffer *record = buffer_record(handle);
+    unsigned char patch[PAGE];
+    /* Exhaust the bounded cache without completing a serial. Never recycle
+    busy storage, even if that means allocating and evicting a busy entry. */
+    for (unsigned i = 0; i < BUFFER_RETIRED_MAX; i++)
+        if (record->retired[i]) record->retired_used[i] = current_serial;
+    uint64_t reused = buffer_writes.reused;
+    uint64_t allocated = buffer_writes.allocated;
+    NSMutableArray<id<MTLBuffer>> *pending = [NSMutableArray array];
+    for (unsigned step = 0; step < BUFFER_RETIRED_MAX + 1; step++) {
+        [pending addObject:record->buffer];
+        use_buffer(record);
+        memset(patch, (int)step + 90, PAGE);
+        gpu_metal_buffer_write(handle, 0, PAGE, patch, 0);
+        memcpy(expected, patch, PAGE);
+        for (id<MTLBuffer> old in pending) assert(record->buffer != old);
+        assert(buffer_writes.reused == reused);
+        assert(buffer_writes.allocated == allocated + step + 1);
+        assert(memcmp(record->buffer.contents, expected, BYTES) == 0);
+    }
+    /* Full overwrite and zero/invalid writes do no preservation work. */
+    uint64_t copied = buffer_writes.copied_bytes;
+    use_buffer(record);
+    gpu_metal_buffer_write(handle, 0, BYTES, expected, 0);
+    assert(buffer_writes.copied_bytes == copied);
+    id<MTLBuffer> first = record->buffer;
+    use_buffer(record);
+    gpu_metal_buffer_write(handle, 0, 0, patch, 0);
+    gpu_metal_buffer_write(handle, BYTES, PAGE, patch, 0);
+    assert(record->buffer == first);
+}
+
+/* Controlled serials model draws of the CPU-written mirror without requiring
+frame pacing. transition_test separately checks real queued-draw lifetimes. */
+static void buffer_recycle_test(void)
+{
+    enum { BYTES = 4 * 1024 * 1024, PAGE = 4096 };
+    gpu_buffer handle = gpu_metal_buffer_create(BYTES);
+    MetalBuffer *record = buffer_record(handle);
+    unsigned char *expected = calloc(1, BYTES);
+    unsigned char patch[PAGE];
+    assert(expected);
+    gpu_metal_buffer_write(handle, 0, BYTES, expected, 0);
+    id<MTLBuffer> first = record->buffer;
+    uint64_t allocated = buffer_writes.allocated, reused = buffer_writes.reused;
+    uint64_t copied = buffer_writes.copied_bytes;
+    memset(patch, 1, PAGE);
+    use_buffer(record);
+    gpu_metal_buffer_write(handle, PAGE, PAGE, patch, 0);
+    memset(expected + PAGE, 1, PAGE);
+    assert(record->buffer != first);
+    assert(buffer_writes.allocated == allocated + 1);
+    assert(buffer_writes.copied_bytes == copied + BYTES - PAGE);
+    assert(memcmp(first.contents, expected, PAGE * 2) != 0); /* old version untouched */
+    assert(!((unsigned char *)first.contents)[PAGE]);
+    /* Mark only the retired version completed. It must catch up with the
+    previous patch, not copy four MiB, when a disjoint page is changed. */
+    for (unsigned i = 0; i < BUFFER_RETIRED_MAX; i++) record->retired_used[i] = 0;
+    use_buffer(record);
+    copied = buffer_writes.copied_bytes;
+    memset(patch, 2, PAGE);
+    gpu_metal_buffer_write(handle, 3 * PAGE, PAGE, patch, 0);
+    memset(expected + 3 * PAGE, 2, PAGE);
+    assert(record->buffer == first);
+    assert(buffer_writes.reused == reused + 1);
+    assert(buffer_writes.copied_bytes == copied + PAGE);
+    assert(memcmp(record->buffer.contents, expected, BYTES) == 0);
+    /* UNUSED and idle writes still invalidate all retired copies. */
+    for (unsigned step = 0; step < 64; step++) {
+        uint32_t offset = (step * 7919U) % (BYTES - PAGE);
+        memset(patch, (int)step + 3, PAGE);
+        for (unsigned i = 0; i < BUFFER_RETIRED_MAX; i++) record->retired_used[i] = 0;
+        record->used = step % 3 == 0 ? 0 : current_serial;
+        gpu_metal_buffer_write(handle, offset, PAGE, patch, step % 3 == 1 ? GPU_WRITE_UNUSED : 0);
+        memcpy(expected + offset, patch, PAGE);
+        assert(memcmp(record->buffer.contents, expected, BYTES) == 0);
+    }
+    buffer_busy_eviction_test(handle, expected);
+    [buffers remove:handle];
+    free(expected);
 }
 
 static unsigned long expected_lookup(int changed)
@@ -347,7 +585,12 @@ int main(int argc, const char **argv)
         }
         struct gpu_draw draw = make_draw();
         assert(draw.vertex_shader && draw.pixel_shader && draw.color_target);
+        assert(capabilities.base_vertex);
+        buffer_cache_budget_test();
         transition_test(draw);
+        buffer_gpu_lifetime_test();
+        buffer_recycle_test();
+        indexed_base_vertex_test(draw);
         pool_early_return_test(draw);
         static const char *names[] = { "same-state", "changing-constants", "changing-ranges" };
         for (int mode = 0; mode < 3; mode++) {

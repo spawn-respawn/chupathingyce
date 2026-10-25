@@ -4300,7 +4300,7 @@ static void D3DDevice_DrawIndexedVertices_unprofiled(D3DPRIMITIVETYPE primitive_
 	unsigned long minimum, maximum, index, count, generation = 0, index_offset = 0;
 	WORD *indices = NULL;
 	const WORD *source = index_data;
-	BOOL mirrored;
+	BOOL mirrored, rebase;
 
 	if (!vertex_count || vertex_count > METAL_DRAW_VERTICES_MAX || !index_data || !prepare_draw_profiled(draw, FALSE))
 		return;
@@ -4310,6 +4310,13 @@ static void D3DDevice_DrawIndexedVertices_unprofiled(D3DPRIMITIVETYPE primitive_
 	mirrored = primitive_type != D3DPT_QUADLIST && device_capabilities.base_vertex &&
 		mirror_range((unsigned long)XBOX_ADDRESS(index_data), vertex_count * sizeof(WORD), &draw->index_buffer, &index_offset, &generation);
 	index_extent(index_data, vertex_count, generation, mirrored, &minimum, &maximum);
+	/* Metal treats 0xffff as primitive restart in indexed strips, before
+	adding baseVertex. Keep the old rebased path for these ranges so a high
+	Xbox vertex index cannot turn into a restart merely by enabling mirrors. */
+	rebase = !device_capabilities.base_vertex ||
+		((primitive_type == D3DPT_TRIANGLESTRIP || primitive_type == D3DPT_LINESTRIP) && maximum == UINT16_MAX);
+	if (rebase)
+		mirrored = FALSE;
 	trace_draw("indexed", primitive_type, vertex_count, NULL);
 	/* (the streams from the base vertex on: index i is vertex base + i) */
 	if (device.base_vertex_index > UINT32_MAX - minimum ||
@@ -4335,7 +4342,7 @@ static void D3DDevice_DrawIndexedVertices_unprofiled(D3DPRIMITIVETYPE primitive_
 		source = indices;
 		draw->primitive = GPU_PRIMITIVE_TRIANGLES;
 	}
-	if (!device_capabilities.base_vertex)
+	if (rebase)
 	{
 		/* the indices are copied anyway: rebase them */
 		WORD *rebased = index_scratch(_index_scratch_rebased, count);

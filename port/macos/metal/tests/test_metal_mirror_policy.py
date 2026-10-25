@@ -24,6 +24,7 @@ typedef unsigned int gpu_buffer;
 #define FALSE 0
 #define PLATFORM_CONTIGUOUS_BASE 0x10000UL
 #define PLATFORM_CONTIGUOUS_SIZE 0x800000UL
+#define PLATFORM_CONTIGUOUS_MAXIMUM PLATFORM_CONTIGUOUS_SIZE
 #define GPU_WRITE_UNUSED 1
 static struct { unsigned long frame; } device;
 static struct { unsigned long mirrored_bytes; } stats;

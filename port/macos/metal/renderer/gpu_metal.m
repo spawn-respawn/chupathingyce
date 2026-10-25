@@ -75,15 +75,43 @@ Handles index tables of these; 0 is none. */
 @implementation MetalTexture
 @end
 
+/* Retired storage is charged globally, including busy versions we retain.
+This bounds cache ownership, not resources retained by in-flight commands.
+All buffer-record/cache mutations occur on the renderer thread. */
+#define BUFFER_RETIRED_MAX 2
+#define BUFFER_RETIRED_BYTES_MAX (32UL * 1024 * 1024)
+static NSUInteger buffer_retired_bytes;
+
+static NSUInteger buffer_storage_bytes(id<MTLBuffer> buffer)
+{
+	/* Include Metal's allocation padding; never charge less than payload. */
+	return MAX(buffer.length, buffer.allocatedSize);
+}
+
 @interface MetalBuffer : NSObject
 {
 @public
 	id<MTLBuffer> buffer;
 	uint64_t used;
+	id<MTLBuffer> retired[BUFFER_RETIRED_MAX];
+	uint64_t retired_used[BUFFER_RETIRED_MAX];
+	/* Union of writes since retirement, [first, last). */
+	NSUInteger retired_first[BUFFER_RETIRED_MAX], retired_last[BUFFER_RETIRED_MAX];
 	BOOL transient;                  /* a stream chunk: never renamed */
 }
 @end
 @implementation MetalBuffer
+- (void)dealloc
+{
+	for (unsigned index = 0; index < BUFFER_RETIRED_MAX; index++)
+	{
+		if (!retired[index])
+			continue;
+		NSUInteger bytes = buffer_storage_bytes(retired[index]);
+		assert(buffer_retired_bytes >= bytes);
+		buffer_retired_bytes -= bytes;
+	}
+}
 @end
 
 @interface MetalShader : NSObject
@@ -228,6 +256,11 @@ static int frame_started;
 static unsigned long frame_slot;
 static unsigned long frames;
 static unsigned long renames;
+static struct
+{
+	uint64_t allocated, reused, copied_bytes, uploaded_bytes;
+	uint64_t cache_peak_bytes, cache_skipped;
+} buffer_writes;
 
 /* frame pacing (pacing_schedule): GPU time of completed command buffers, and
 the time this frame's CPU spent waiting rather than working */
@@ -991,29 +1024,138 @@ static gpu_buffer gpu_metal_buffer_create(uint32_t size)
 	}
 }
 
+/* Preserve only stale bytes outside the incoming write. A new allocation is
+stale everywhere; a recycled version is stale only where written since retired. */
+static void buffer_preserve(id<MTLBuffer> destination, id<MTLBuffer> source,
+	NSUInteger first, NSUInteger last, NSUInteger offset, NSUInteger end)
+{
+	assert(first <= last);
+	assert(last <= source.length);
+	assert(destination.length == source.length);
+	assert(offset <= end);
+	assert(end <= source.length);
+	NSUInteger prefix = MIN(last, offset), suffix = MAX(first, end);
+	if (first < prefix)
+	{
+		memcpy((unsigned char *)destination.contents + first,
+			(const unsigned char *)source.contents + first, prefix - first);
+		buffer_writes.copied_bytes += prefix - first;
+	}
+	if (suffix < last)
+	{
+		memcpy((unsigned char *)destination.contents + suffix,
+			(const unsigned char *)source.contents + suffix, last - suffix);
+		buffer_writes.copied_bytes += last - suffix;
+	}
+}
+
+static void buffer_retired_drop(MetalBuffer *record, unsigned slot)
+{
+	assert(record != nil);
+	assert(slot < BUFFER_RETIRED_MAX);
+	if (!record->retired[slot])
+		return;
+	NSUInteger bytes = buffer_storage_bytes(record->retired[slot]);
+	assert(buffer_retired_bytes >= bytes);
+	buffer_retired_bytes -= bytes;
+	record->retired[slot] = nil;
+}
+
+/* Replacing a cached version first returns its budget. Full caches reject
+admission rather than waiting, scanning other buffers or modifying GPU data. */
+static void buffer_retire(MetalBuffer *record, unsigned slot)
+{
+	assert(record != nil);
+	assert(slot < BUFFER_RETIRED_MAX);
+	buffer_retired_drop(record, slot);
+	assert(buffer_retired_bytes <= BUFFER_RETIRED_BYTES_MAX);
+	NSUInteger size = record->buffer.length;
+	NSUInteger bytes = buffer_storage_bytes(record->buffer);
+	if (bytes > BUFFER_RETIRED_BYTES_MAX - buffer_retired_bytes)
+	{
+		buffer_writes.cache_skipped++;
+		return;
+	}
+	record->retired[slot] = record->buffer;
+	record->retired_used[slot] = record->used;
+	record->retired_first[slot] = size;
+	record->retired_last[slot] = 0;
+	buffer_retired_bytes += bytes;
+	buffer_writes.cache_peak_bytes = MAX(buffer_writes.cache_peak_bytes, buffer_retired_bytes);
+}
+
+static BOOL buffer_rename(MetalBuffer *record, NSUInteger offset, NSUInteger end)
+{
+	assert(record != nil);
+	assert(offset < end);
+	assert(end <= record->buffer.length);
+	unsigned slot = 0;
+	id<MTLBuffer> replacement = nil;
+
+	for (unsigned index = 0; index < BUFFER_RETIRED_MAX; index++)
+	{
+		if (record->retired[index] && !busy(record->retired_used[index]))
+		{
+			slot = index;
+			replacement = record->retired[index];
+			break;
+		}
+		/* Prefer an empty slot, otherwise evict the oldest busy version. */
+		if (!record->retired[index] ||
+			(record->retired[slot] && record->retired_used[index] < record->retired_used[slot]))
+			slot = index;
+	}
+	if (replacement)
+	{
+		buffer_preserve(replacement, record->buffer, record->retired_first[slot],
+			record->retired_last[slot], offset, end);
+		buffer_writes.reused++;
+	}
+	else
+	{
+		replacement = [device newBufferWithLength:record->buffer.length options:MTLResourceStorageModeShared];
+		if (!replacement)
+		{
+			host_fatal("Metal: buffer rename allocation failed (%lu bytes)",
+				(unsigned long)record->buffer.length);
+			return NO;
+		}
+		buffer_preserve(replacement, record->buffer, 0, record->buffer.length, offset, end);
+		buffer_writes.allocated++;
+	}
+	buffer_retire(record, slot);
+	record->buffer = replacement;
+	record->used = 0;
+	renames++;
+	return YES;
+}
+
 static void gpu_metal_buffer_write(gpu_buffer buffer, uint32_t offset, uint32_t size, const void *data, uint32_t flags)
 {
 	@autoreleasepool
 	{
 		MetalBuffer *record = buffer_record(buffer);
 
-		if (!record || offset > record->buffer.length || size > record->buffer.length - offset)
+		if (!record || !size || !data || offset > record->buffer.length || size > record->buffer.length - offset)
 			return;
 		/* a range no queued draw reads (GPU_WRITE_UNUSED), or a buffer nothing
 		recorded or running uses, takes the write in place; otherwise the
 		buffer gets new storage holding the old contents and the write, and
 		the commands already recorded keep the old storage */
-		if (!(flags & GPU_WRITE_UNUSED) && busy(record->used))
-		{
-			id<MTLBuffer> renamed = [device newBufferWithLength:record->buffer.length
-				options:MTLResourceStorageModeShared];
-
-			memcpy(renamed.contents, record->buffer.contents, record->buffer.length);
-			record->buffer = renamed;
-			record->used = 0;
-			renames++;
-		}
+		NSUInteger end = (NSUInteger)offset + size;
+		if (!(flags & GPU_WRITE_UNUSED) && busy(record->used) && !buffer_rename(record, offset, end))
+			return;
 		memcpy((unsigned char *)record->buffer.contents + offset, data, size);
+		buffer_writes.uploaded_bytes += size;
+		/* Include in-place and UNUSED writes: every retired version must catch
+		up with them before it can become current again. */
+		for (unsigned index = 0; index < BUFFER_RETIRED_MAX; index++)
+		{
+			if (!record->retired[index])
+				continue;
+			record->retired_first[index] = MIN(record->retired_first[index], (NSUInteger)offset);
+			record->retired_last[index] = MAX(record->retired_last[index], end);
+		}
 	}
 }
 
@@ -3205,7 +3347,8 @@ static uint32_t gpu_metal_draw_in_pool(const struct gpu_draw *draw,
 
 			if (count)
 				[encoder drawIndexedPrimitives:type indexCount:count indexType:MTLIndexTypeUInt32
-					indexBuffer:buffer_record(indices)->buffer indexBufferOffset:offset];
+					indexBuffer:buffer_record(indices)->buffer indexBufferOffset:offset
+					instanceCount:1 baseVertex:draw->index_buffer ? draw->base_vertex : 0 baseInstance:0];
 			draw_profile_lap(&metal_profile, DRAW_PROFILE_ENCODE, &stage_started);
 			return 1;
 		}
@@ -3222,9 +3365,11 @@ static uint32_t gpu_metal_draw_in_pool(const struct gpu_draw *draw,
 			if (!record)
 				return 1;
 			use_buffer(record);
-			/* the base vertex is ignored, as on Apple's GL (base_vertex is 0) */
+			/* Metal adds this signed offset to vertex_id before vertex pulling;
+			the frontend binds streams starting at the minimum source index. */
 			[encoder drawIndexedPrimitives:type indexCount:draw->count indexType:MTLIndexTypeUInt16
-				indexBuffer:record->buffer indexBufferOffset:draw->index_offset];
+				indexBuffer:record->buffer indexBufferOffset:draw->index_offset
+				instanceCount:1 baseVertex:draw->base_vertex baseInstance:0];
 		}
 		else
 		{
@@ -3896,6 +4041,19 @@ static uint32_t gpu_metal_present(gpu_texture back_buffer)
 			platform_log("Metal: %lu renames in the last 600 frames", renames);
 			renames = 0;
 		}
+		if (frames % 600 == 0 && buffer_writes.uploaded_bytes)
+		{
+			platform_log("Metal: buffer writes: %llu allocated, %llu recycled, %llu bytes preserved, "
+				"%llu bytes uploaded in the last 600 frames",
+				(unsigned long long)buffer_writes.allocated, (unsigned long long)buffer_writes.reused,
+				(unsigned long long)buffer_writes.copied_bytes, (unsigned long long)buffer_writes.uploaded_bytes);
+			platform_log("Metal: retired buffer cache: %lu bytes (%llu peak), budget %lu bytes; "
+				"%llu admissions skipped", (unsigned long)buffer_retired_bytes,
+				(unsigned long long)buffer_writes.cache_peak_bytes, BUFFER_RETIRED_BYTES_MAX,
+				(unsigned long long)buffer_writes.cache_skipped);
+			memset(&buffer_writes, 0, sizeof(buffer_writes));
+			buffer_writes.cache_peak_bytes = buffer_retired_bytes;
+		}
 		if (frames % 600 == 0 && state_cache.draws)
 		{
 			platform_log("Metal: %.1f draws a frame make %.1f encoder calls each and skip %.1f (state cache %s)",
@@ -4339,7 +4497,7 @@ static void gpu_metal_initialize(uint32_t flags, struct gpu_capabilities *capabi
 		/* Native Metal capabilities. Vertex colors are swizzled by the frontend;
 		visibility uses exact counts rather than the mobile boolean path. */
 		capabilities->vertex_bgra = 0;
-		capabilities->base_vertex = 0;
+		capabilities->base_vertex = 1;
 		capabilities->triangle_fans = 1;
 		capabilities->line_loops = 1;
 		capabilities->sampler_lod_bias = 0;
