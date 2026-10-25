@@ -1,0 +1,8 @@
+{
+  "name": "gun_game",
+  "order": 30,
+  "default": true,
+  "help": "OpenCE-compatible Gun Game (free for all Slayer, weapon per level)",
+  "extension": true,
+  "settings": "settings.inc"
+}
