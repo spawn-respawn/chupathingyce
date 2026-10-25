@@ -204,6 +204,25 @@ static struct
 	{ L"Hardcore King", L"HC King" },
 };
 
+/* what the gametype picker's card says under its name (the Xbox's list has
+none for these) */
+static wchar_t const *const game_modes_descriptions[NUMBER_OF_GAMETYPES] =
+{
+	L"No shields and a shot to the\nhead kills. Pistol and assault\nrifle only. Team Slayer.",
+	L"Humans killed join the zombies,\nwho win when no human is left.\nTeam Slayer.",
+	L"Each kill gives the next weapon;\na kill with the last wins.\nFree for all Slayer.",
+	L"No motion sensor or aim assist;\na kill restores your health and\nshields. Team Slayer.",
+	L"No motion sensor or aim assist;\na kill restores your health and\nshields. Capture the Flag.",
+	L"No motion sensor or aim assist;\na kill restores your health and\nshields. Team Oddball.",
+	L"No motion sensor or aim assist;\na kill restores your health and\nshields. Team King of the Hill.",
+};
+
+wchar_t const *game_modes_gametype_description(
+	short index)
+{
+	return VALID_INDEX(index, NUMBER_OF_GAMETYPES) ? game_modes_descriptions[index] : NULL;
+}
+
 short game_modes_gametype_count(
 	void)
 {

@@ -284,3 +284,13 @@ def test_hardcore_hides_sensor_and_aim_assist():
     source = (ROOT / "source/features/hardcore/hardcore.c").read_text()
     assert ".hide_motion_sensor = hardcore_hide_motion_sensor" in source
     assert ".suppress_aim_assist = hardcore_suppress_aim_assist" in source
+
+
+def test_every_builtin_gametype_has_a_card_description():
+    """the picker's cards read the map's description list by profile number, which has none past 26"""
+    source = (ROOT / "port/linux/game/game_modes.c").read_text()
+    names = re.search(r"game_modes_gametypes\[NUMBER_OF_GAMETYPES\] =\n\{(.*?)\n\};", source, re.S).group(1)
+    descriptions = re.search(r"game_modes_descriptions\[NUMBER_OF_GAMETYPES\] =\n\{(.*?)\n\};", source, re.S).group(1)
+    assert len(re.findall(r"^\t\{ L", names, re.M)) == len(re.findall(r"^\tL\"", descriptions, re.M)) == 7
+    cards = (ROOT / "source/interface/ui_widget_game_data_input_functions.c").read_text()
+    assert "playlist_profile_default_description(" in cards

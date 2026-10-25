@@ -63,6 +63,8 @@ unsigned char game_modes_kind(struct game_variant const *variant);
 OpenCE's OPENCE bank of Select Gametype lists them */
 short game_modes_gametype_count(void);
 wchar_t const *game_modes_gametype_name(short index);
+/* its card's description in the gametype picker, NULL for none */
+wchar_t const *game_modes_gametype_description(short index);
 /* its variant, its PC options and its 16 option bytes */
 void game_modes_gametype(short index, struct game_variant *variant, struct game_variant_options *options,
 	unsigned char extended[16]);

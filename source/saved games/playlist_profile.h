@@ -67,6 +67,8 @@ boolean playlist_profile_get_display_name(
 /* port: a default gametype's name: the map's string list's (string_list_index:
 ui\default_multiplayer_game_setting_names), else the port's own built-ins'
 (Bomb, Grifball); NULL for none */
+wchar_t const *playlist_profile_default_description(
+	short profile_index);
 wchar_t const *playlist_profile_default_name(
 	short profile_index,
 	long string_list_index);

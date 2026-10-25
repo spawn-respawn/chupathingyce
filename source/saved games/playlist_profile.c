@@ -307,6 +307,20 @@ wchar_t const *playlist_profile_default_name(
 	return unicode_string_list_get_string(string_list_index, profile_index);
 }
 
+/* port: a default gametype's description where the map's list has none (past
+its 26: OpenCE's built-in gametypes), NULL for none */
+wchar_t const *playlist_profile_default_description(
+	short profile_index)
+{
+#ifdef HALO_GAME_BROWSER
+	short first = NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES;
+
+	if (profile_index >= first && profile_index < NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_PORT_DEFAULT_PLAYLIST_PROFILES)
+		return game_modes_gametype_description((short)(profile_index - first));
+#endif
+	return NULL;
+}
+
 /* ---------- public code */
 
 void playlist_profiles_initialize(

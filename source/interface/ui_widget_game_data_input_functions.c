@@ -3516,9 +3516,13 @@ static void mutliplayer_settings_select_list_update_displayed_items(
 
 				if (descriptions_tag_index != NONE && label_box->parameters.text_box.text)
 				{
+					/* port: OpenCE's gametypes' own descriptions, past the map's list */
+					wchar_t const *port_description = playlist_profile_default_description(
+						(short)(profile->flags >> 8));
+
 					ustrncpy(
 						label_box->parameters.text_box.text,
-						unicode_string_list_get_string(
+						port_description ? port_description : unicode_string_list_get_string(
 							descriptions_tag_index,
 							string_index),
 						0xFF);
