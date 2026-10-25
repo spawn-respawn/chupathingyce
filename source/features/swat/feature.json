@@ -1,0 +1,8 @@
+{
+  "name": "swat",
+  "order": 32,
+  "default": true,
+  "help": "OpenCE-compatible SWAT (no shields, headshots kill)",
+  "extension": true,
+  "settings": "settings.inc"
+}
