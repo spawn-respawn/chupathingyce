@@ -40,6 +40,7 @@ union real_vector3d;
 
 struct game_engine;
 struct game_variant;
+struct game_variant_options;
 struct player_action;
 struct scenario_object_datum;
 union real_rgb_color;
@@ -87,6 +88,9 @@ struct halo_world_geometry
 	char const *(*edit_resource)(void); /* stable asset identity for saved poses */
 };
 
+/* Hardcore is a flag over any mode, not a mode: its bit in opence_modes */
+#define HALO_OPENCE_HARDCORE 31
+
 /* ---------- rulesets */
 
 struct halo_ruleset
@@ -118,6 +122,50 @@ struct halo_ruleset
 	real (*damage_multiplier)(long damaging_player_index, long damaged_player_index);
 	/* FALSE stops the player collecting items or ammunition */
 	boolean (*can_collect_items)(long player_index);
+	/* (the hooks below are queries the engine makes of the session's ruleset;
+	absent ones have the neutral answer given) */
+	/* units.c: TRUE: the unit takes no grenades or powerups and enters no
+	seat (Infection's zombie). Default FALSE. */
+	boolean (*unit_restricted)(long unit_index);
+	/* players.c, units.c: FALSE: the unit may not drop the weapon. Default TRUE. */
+	boolean (*allow_weapon_drop)(long unit_index, long weapon_index);
+	/* weapons.c, objects.c: TRUE: an objective weapon (the ball) may be
+	deleted though the game's own rules say not. Default FALSE. */
+	boolean (*can_delete_objective_weapon)(long weapon_index);
+	/* units.c, network_damage.c: a unit's melee damage factor. Default 1. */
+	real (*melee_multiplier)(long unit_index);
+	/* units.c: TRUE: the melee hits the rider of an open seat, not its
+	vehicle. Default FALSE. */
+	boolean (*melee_rider_target)(long attacker_index, long target_index);
+	/* network_damage.c: the host's check of a client's melee report on such a
+	rider. Default TRUE. */
+	boolean (*melee_rider_visible)(long attacker_index, long target_index, union real_vector3d const *direction);
+	/* players.c: a unit was attached to the player (before control passes) */
+	void (*player_unit_attached)(long player_index);
+	/* game_engine.c: the score title's time left, if the ruleset keeps its
+	own clock (TRUE and *ticks); default: the variant's time limit */
+	boolean (*time_remaining)(long *ticks);
+	/* game_engine.c: ticks until a killed player respawns (0 or more
+	replaces the engine's minimum); default -1 */
+	long (*respawn_ticks)(void);
+	/* damage.c: TRUE: a shot (a bullet, bolt or needle: shot) to a player's
+	head kills at once. Default FALSE. */
+	boolean (*headshot_kills)(long object_index, boolean shot);
+	/* game_engine.c: the game's state on the network, as the engine's own is
+	(TRUE: handled; *written the byte count, *read the success) */
+	boolean (*write_network_state)(unsigned char *buffer, long size, long *written);
+	boolean (*read_network_state)(unsigned char const *buffer, long size, boolean first, boolean *read);
+	/* the ruleset sets teams itself (the engine's auto team balance is off) */
+	boolean manages_teams;
+	/* the ruleset's players carry the ball's weapon definition (resources
+	are predicted for it) */
+	boolean uses_ball_weapon;
+	/* players.c: a player has spawned, after the engine's own starting
+	equipment (game_engine_postspawn_player_update). Unlike the hooks above
+	this one adds to the engine's handling rather than replacing it: use it
+	to replace the starting inventory (Gun Game's weapon) on the spawn
+	tick. Host only; clients take the inventory from the host's objects. */
+	void (*postspawn_player)(long player_index);
 };
 
 /* ---------- player controllers */
@@ -181,6 +229,28 @@ struct halo_extension
 	/* main.c: each unpaused frame, before the connection's frame starts */
 	void (*main_frame_update)(boolean main_menu_loaded, real seconds);
 
+	/* network_server_manager.c: a hosted game's variant is being set up. An
+	extension may choose OpenCE's gametype options for it: it may adjust
+	options (the PC options, e.g. no_map_weapons) and fills extended (the 16
+	bytes of game_engine.h's struct game_variant_extended_options, which the
+	caller has set to the defaults: each extension changes only its own) and
+	returns TRUE if it chose; every extension is asked, so Hardcore can be
+	chosen with a mode. Called only on the host. */
+	/* OpenCE's gametype modes this extension plays, a bit each (1 << mode:
+	game_engine.h's _game_mode_*; HALO_OPENCE_HARDCORE for Hardcore). A client
+	leaves a game of an OpenCE mode no extension plays, rather than playing it
+	as plain Slayer. */
+	unsigned long opence_modes;
+	/* any TRUE wins: Hardcore's rules over whatever game engine is playing,
+	so no ruleset owns them */
+	boolean (*hide_motion_sensor)(void);
+	boolean (*suppress_aim_assist)(void);
+	/* game_engine.c: a kill was handled (the engine's own first); every
+	extension is told */
+	void (*player_killed_player)(long killing_player_index, long dead_player_index, boolean friendly_fire);
+	boolean (*host_game_options)(struct game_variant const *variant, struct game_variant_options *options,
+		unsigned char extended[16]);
+
 	/* the game must not be reported to the game list, Delta Stats or the
 	event log (any TRUE wins) */
 	boolean (*suppress_game_report)(void);
@@ -212,6 +282,26 @@ boolean halo_extensions_suppress_game_report(void);
 /* rulesets: the override calls return TRUE when the active ruleset handled
 the operation (its result in *result); FALSE leaves it to the engine */
 struct halo_ruleset const *halo_extensions_active_ruleset(void);
+/* the ruleset queries (neutral answers without a ruleset or hook) */
+boolean halo_extensions_unit_restricted(long unit_index);
+boolean halo_extensions_allow_weapon_drop(long unit_index, long weapon_index);
+boolean halo_extensions_can_delete_objective_weapon(long weapon_index);
+real halo_extensions_melee_multiplier(long unit_index);
+boolean halo_extensions_melee_rider_target(long attacker_index, long target_index);
+boolean halo_extensions_melee_rider_visible(long attacker_index, long target_index,
+	union real_vector3d const *direction);
+void halo_extensions_player_unit_attached(long player_index);
+boolean halo_extensions_time_remaining(long *ticks);
+long halo_extensions_respawn_ticks(void);
+boolean halo_extensions_headshot_kills(long object_index, boolean shot);
+boolean halo_extensions_write_network_state(unsigned char *buffer, long size, long *written);
+boolean halo_extensions_read_network_state(unsigned char const *buffer, long size, boolean first, boolean *read);
+boolean halo_extensions_manages_teams(void);
+boolean halo_extensions_uses_ball_weapon(void);
+/* general: Hardcore's */
+boolean halo_extensions_hide_motion_sensor(void);
+boolean halo_extensions_suppress_aim_assist(void);
+void halo_extensions_player_killed_player(long killing_player_index, long dead_player_index, boolean friendly_fire);
 void halo_extensions_filter_player_action(long player_index, struct player_action *action);
 void halo_extensions_end_tick(void);
 boolean halo_extensions_player_killed(long killing_player_index, long dead_player_index);
@@ -222,6 +312,11 @@ boolean halo_extensions_player_state_message(long player_index, wchar_t *message
 	boolean *result);
 real halo_extensions_damage_multiplier(long damaging_player_index, long damaged_player_index);
 boolean halo_extensions_can_collect_items(long player_index);
+void halo_extensions_postspawn_player(long player_index);
+/* whether any registered ruleset plays OpenCE's game mode (game_engine.h's _game_mode_*) */
+boolean halo_extensions_plays_opence_mode(long mode);
+boolean halo_extensions_host_game_options(struct game_variant const *variant, struct game_variant_options *options,
+	unsigned char extended[16]);
 boolean halo_extensions_suppress_network_state(void);
 
 /* Procedural geometry is additive, independent of editor ownership. */

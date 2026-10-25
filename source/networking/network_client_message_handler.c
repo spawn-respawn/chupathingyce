@@ -191,6 +191,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "extensions/extension_api.h" /* port: which OpenCE modes this build plays */
 #include "cseries/cseries_windows.h"
 #include "bungie_net/common/message_header.h"
 #include "bungie_net/network/transport.h"
@@ -1116,6 +1117,7 @@ typedef char network_game_client_settings_size_assert[
 	sizeof(network_game_client_settings_staging) >= NETWORK_GAME_CLIENT_SETTINGS_MAXIMUM ? 1 : -1];
 
 static byte network_game_client_extended_options[16];
+void game_modes_pending_set(unsigned char const *bytes); /* port/linux/game/game_modes.c */
 
 /* the OpenCE game type the record plays that this build does not (its name
 for the player and the log), or NULL: Infection, Gun Game and SWAT on the
@@ -1128,22 +1130,12 @@ static wchar_t const *network_game_client_unsupported_game_type(
 	int mode = network_rules_extended_options_mode(network_game_client_extended_options,
 		game->variant.game_engine_index == game_engine_slayer, game->variant.universal_variant.teams != 0, &hardcore);
 
-	switch (mode)
+	/* SWAT, Infection and Hardcore are played (game_modes.c, infection.c); Gun
+	Game by its extension, if this build has one */
+	if (mode == 3 && !halo_extensions_plays_opence_mode(3))
 	{
-	case 1:
-		*name = "SWAT";
-		return L"This game uses an OpenCE game type\r\nChupathingy doesn't support yet\r\n(SWAT).";
-	case 2:
-		*name = "Infection";
-		return L"This game uses an OpenCE game type\r\nChupathingy doesn't support yet\r\n(Infection).";
-	case 3:
 		*name = "Gun Game";
 		return L"This game uses an OpenCE game type\r\nChupathingy doesn't support yet\r\n(Gun Game).";
-	}
-	if (hardcore)
-	{
-		*name = "Hardcore";
-		return L"This game uses an OpenCE game type\r\nChupathingy doesn't support yet\r\n(Hardcore).";
 	}
 	return NULL;
 }
@@ -1233,10 +1225,13 @@ static boolean network_game_client_receive_game_settings_piece(
 						}
 					}
 					network_game_client_note_host_network_version(NETWORK_GAME_CLIENT_EXTENDED_OPTIONS_VERSION);
+					/* the game takes them when it starts (game_modes.c) */
+					game_modes_pending_set(network_game_client_extended_options);
 				}
 				else
 				{
 					network_rules_extended_options_default(network_game_client_extended_options);
+					game_modes_pending_set(network_game_client_extended_options);
 				}
 #ifdef HALO_PORT_CONSOLE_LIMITS
 				{

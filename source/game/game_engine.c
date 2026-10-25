@@ -537,6 +537,7 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "extensions/extension_api.h" /* port: extensions' rulesets */
 #include "cseries_windows.h"
 #include "errors.h"
 #include "aim_assist.h"
@@ -1204,7 +1205,11 @@ static void game_engine_generate_title_string(
 	if (game_variant_options_get()->time_limit > 0 &&
 		game_engine_globals.postgame_state == game_engine_mode_active)
 	{
-		long left = game_variant_options_get()->time_limit * 60L * TICKS_PER_SECOND - game_time_get();
+		long left;
+
+		/* port: a ruleset's own clock (Infection's round starts after its countdown) */
+		if (!halo_extensions_time_remaining(&left))
+			left = game_variant_options_get()->time_limit * 60L * TICKS_PER_SECOND - game_time_get();
 		wchar_t time_string[32];
 
 		ticks_to_unicode_time_string(MAX(left, 0), NUMBEROF(time_string), time_string);
@@ -4052,6 +4057,8 @@ void game_engine_dispose(
 
 		game_engine = NULL;
 	}
+	/* port: the claiming ruleset's ownership ends with its engine */
+	halo_extensions_end_game_session();
 
 	return;
 }
@@ -4851,6 +4858,7 @@ void game_engine_player_killed(
 	boolean valid_players;
 	boolean team_change;
 	long message = NONE;
+	long respawn_ticks;
 
 	match_assert(
 		"c:\\halo\\SOURCE\\game\\game_engine.c",
@@ -4915,6 +4923,8 @@ void game_engine_player_killed(
 			dead_player_index,
 			friendly_fire);
 	}
+	/* port: OpenCE's gametypes' (Hardcore's restore of the killer) */
+	halo_extensions_player_killed_player(killing_player_index, dead_player_index, friendly_fire);
 
 	same_player = killing_player_index == dead_player_index;
 	if (killing_player_index != NONE && dead_player_index != NONE)
@@ -4960,7 +4970,7 @@ void game_engine_player_killed(
 	moves the dead to the other team when his is two or more bigger (his
 	next unit is the other team's, which the clients take it from:
 	network_player_attach_unit) */
-	if (global_variant.universal_variant.teams && game_variant_options_get()->auto_team_balance && !team_change &&
+	if (global_variant.universal_variant.teams && game_variant_options_get()->auto_team_balance && !team_change && !halo_extensions_manages_teams() &&
 		!network_game_distributed_client() && VALID_INDEX(dead_player->team_index, 2) && !dead_player->quit_out_of_game)
 	{
 		struct data_iterator iterator;
@@ -4988,6 +4998,12 @@ void game_engine_player_killed(
 		}
 	}
 
+	/* port: a ruleset's respawn time (Infection's), the betrayal penalty's
+	after it */
+	respawn_ticks = halo_extensions_respawn_ticks();
+	if (respawn_ticks >= 0)
+		dead_player->respawn_timer = respawn_ticks;
+
 	/* port: the gametype's friendly fire penalty: the team killer's next
 	respawn later (the dead's own, if he has one waiting) */
 	{
@@ -5006,7 +5022,9 @@ void game_engine_player_killed(
 		}
 	}
 
-	dead_player->respawn_timer = MAX(dead_player->respawn_timer, 90);
+	/* port: (a ruleset's respawn time may be shorter) */
+	if (respawn_ticks < 0)
+		dead_player->respawn_timer = MAX(dead_player->respawn_timer, 90);
 	dead_player = player_get(dead_player_index);
 
 	/* (a team change's death says nothing: team_change.c tells the player) */
@@ -5254,6 +5272,9 @@ boolean game_engine_hud_draw_motion_sensor(
 			default_draw_motion_sensor = FALSE;
 
 		draw_motion_sensor |= default_draw_motion_sensor;
+		/* port: Hardcore has none (port/linux/game/game_modes.c) */
+		if (halo_extensions_hide_motion_sensor())
+			draw_motion_sensor = FALSE;
 	}
 
 	return draw_motion_sensor;
@@ -5492,6 +5513,9 @@ boolean game_engine_should_end_game(
 {
 	boolean should_end_game = FALSE;
 
+	/* port: a ruleset's own end (Infection's round) */
+	if (halo_extensions_should_end_game(&should_end_game))
+		return should_end_game;
 	if (game_engine && !multiple_teams_alive())
 		should_end_game = TRUE;
 	/* port: the gametype's time limit (game_variant_options) */
@@ -7509,7 +7533,8 @@ static void game_engine_predict_resources(
 	object_definition_predict(list_index_to_weapon_definition_index(_weapon_list_frag_grenade));
 	object_definition_predict(list_index_to_weapon_definition_index(_weapon_list_plasma_grenade));
 
-	if (global_variant.game_engine_index == game_engine_oddball)
+	/* port: (and a ruleset's, Infection's zombies' skull) */
+	if (global_variant.game_engine_index == game_engine_oddball || halo_extensions_uses_ball_weapon())
 		object_definition_predict(list_index_to_weapon_definition_index(_weapon_list_ball));
 #ifdef HALO_GAME_BROWSER
 	/* port: Bomb's bomb is the ball */
@@ -7552,6 +7577,10 @@ void game_engine_initialize(
 		game_engine_variant_cleanup(&global_variant);
 		/* port: the cleaned variant's (the one given may be any number) */
 		game_engine = game_engines[global_variant.game_engine_index];
+		/* port: an extension's ruleset may claim the game and supply its own
+		engine (Gun Game: extension_api.h); the options it reads are this
+		game's (game_set_game_variant_options) */
+		game_engine = halo_extensions_select_game_engine(game_engine, &global_variant);
 	}
 
 	return;
@@ -7584,6 +7613,7 @@ void game_engine_initialize_for_new_map(
 					game_engine->dispose();
 
 				game_engine = NULL;
+				halo_extensions_end_game_session();
 			}
 		}
 
@@ -9259,7 +9289,7 @@ static void handle_custom_starting_equipment(
 /* port: a custom loadout's weapon's place in the globals' weapon list
 (game_engine_h's _loadout_weapon_*, from the assault rifle); random: one
 of those the map has */
-static long game_engine_loadout_weapon_definition(
+long game_engine_loadout_weapon_definition(
 	byte weapon)
 {
 	static short const list_indices[] =
@@ -9825,7 +9855,11 @@ long game_engine_write_network_state(
 	switch (game_engine_get_type())
 	{
 	case game_engine_ctf: written = game_engine_ctf_write_network_state(buffer, size); break;
-	case game_engine_slayer: written = game_engine_slayer_write_network_state(buffer, size); break;
+	/* port: (a ruleset's own state: Infection's) */
+	case game_engine_slayer:
+		if (!halo_extensions_write_network_state(buffer, size, &written))
+			written = game_engine_slayer_write_network_state(buffer, size);
+		break;
 	case game_engine_oddball: written = game_engine_oddball_write_network_state(buffer, size); break;
 	case game_engine_king: written = game_engine_king_write_network_state(buffer, size); break;
 	case game_engine_race: written = game_engine_race_write_network_state(buffer, size); break;
@@ -9855,7 +9889,10 @@ void game_engine_read_network_state(
 	switch (game_engine_get_type())
 	{
 	case game_engine_ctf: read = game_engine_ctf_read_network_state(buffer, size, first); break;
-	case game_engine_slayer: read = game_engine_slayer_read_network_state(buffer, size, first); break;
+	case game_engine_slayer:
+		if (!halo_extensions_read_network_state(buffer, size, first, &read))
+			read = game_engine_slayer_read_network_state(buffer, size, first);
+		break;
 	case game_engine_oddball: read = game_engine_oddball_read_network_state(buffer, size, first); break;
 	case game_engine_king: read = game_engine_king_read_network_state(buffer, size, first); break;
 	case game_engine_race: read = game_engine_race_read_network_state(buffer, size, first); break;

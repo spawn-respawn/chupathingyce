@@ -88,6 +88,8 @@ symbols in this file:
 #include "tag_files/tag_groups.h"
 #ifdef HALO_GAME_BROWSER
 #include "gametype_files.h" /* port: port/linux/game/gametype_files.c */
+#include "game_modes.h" /* port: OpenCE's gametypes */
+void network_rules_extended_options_sanitize(unsigned char *options); /* port/linux/game/network_rules.c */
 #endif
 /* the saved game file checksum is an XDK content signature. */
 #include <xtl.h>
@@ -106,6 +108,14 @@ enum
 	PLAYLIST_PROFILE_OPTIONS_VERSION = 1,
 	MAXIMUM_GAME_VARIANT_NAME_LENGTH = 12,
 	NUMBER_OF_DEFAULT_PLAYLIST_PROFILES = 26,
+	/* port: OpenCE's 16 further gametype options (game_engine.h's struct
+	game_variant_extended_options) after the PC options' block: a header
+	(magic, version, size), the options, their own signature. A file without
+	them (every build's before) has the defaults. */
+	PLAYLIST_PROFILE_EXTENDED_OFFSET = 0x180,
+	PLAYLIST_PROFILE_EXTENDED_MAGIC = 0x58454F43, /* 'COEX' little-endian */
+	PLAYLIST_PROFILE_EXTENDED_VERSION = 1,
+	PLAYLIST_PROFILE_EXTENDED_SIZE = 16,
 };
 
 enum
@@ -192,6 +202,15 @@ static void playlist_profile_write(
 static boolean playlist_profile_read_block(
 	long playlist_profile_index,
 	byte *block);
+static void playlist_profile_extended_to_block(
+	byte *block,
+	byte const *extended);
+static boolean playlist_profile_extended_from_block(
+	byte const *block,
+	byte *extended);
+/* port: the further options the asynchronous write writes */
+static byte playlist_profile_write_extended[PLAYLIST_PROFILE_EXTENDED_SIZE];
+
 static boolean playlist_profile_options_from_block(
 	byte const *block,
 	struct game_variant_options *options);
@@ -252,8 +271,14 @@ static struct
 	{ build_game_variant_grifball, L"Grifball" },
 	{ build_game_variant_grifball_open_pitch, L"Open Pitch" },
 };
-#define NUMBER_OF_PORT_DEFAULT_PLAYLIST_PROFILES \
+#define NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES \
 	(short)(sizeof(playlist_profile_port_defaults) / sizeof(playlist_profile_port_defaults[0]))
+/* ... and OpenCE's gametypes after them (game_modes.c): SWAT, Infection, Gun
+Game and Hardcore, each with its PC options and further options, in their own
+bank of Select Gametype. Their numbers follow ChupathingyCE's, so a default
+ChupathingyCE adds is a number it takes from them: it is theirs to settle then. */
+#define NUMBER_OF_PORT_DEFAULT_PLAYLIST_PROFILES \
+	(NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES + game_modes_gametype_count())
 #else
 #define NUMBER_OF_PORT_DEFAULT_PLAYLIST_PROFILES 0
 #endif
@@ -266,9 +291,15 @@ wchar_t const *playlist_profile_default_name(
 {
 #ifdef HALO_GAME_BROWSER
 	if (profile_index >= NUMBER_OF_DEFAULT_PLAYLIST_PROFILES &&
-		profile_index < NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_PORT_DEFAULT_PLAYLIST_PROFILES)
+		profile_index < NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES)
 	{
 		return playlist_profile_port_defaults[profile_index - NUMBER_OF_DEFAULT_PLAYLIST_PROFILES].name;
+	}
+	if (profile_index >= NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES &&
+		profile_index < NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_PORT_DEFAULT_PLAYLIST_PROFILES)
+	{
+		return game_modes_gametype_name((short)(profile_index - NUMBER_OF_DEFAULT_PLAYLIST_PROFILES -
+			NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES));
 	}
 #endif
 	if (profile_index < 0 || profile_index >= NUMBER_OF_DEFAULT_PLAYLIST_PROFILES || string_list_index == NONE)
@@ -559,11 +590,44 @@ boolean playlist_profile_get_options(
 	return FALSE;
 }
 
-/* port: a gametype saved with its PC options */
+/* port: a gametype's OpenCE options (16 bytes: network_rules.h's further
+options): the file's, else the defaults */
+boolean playlist_profile_get_extended_options(
+	long playlist_profile_index,
+	byte *extended)
+{
+	byte block[SAVED_GAME_FILE_BLOCK_SIZE];
+
+	if (playlist_profile_index != NONE &&
+		TEST_FLAG(playlist_profile_index, _saved_game_file_index_valid_bit) &&
+		playlist_profile_read_block(playlist_profile_index, block) &&
+		playlist_profile_extended_from_block(block, extended))
+	{
+		return TRUE;
+	}
+	game_modes_options_default_bytes(extended);
+	return FALSE;
+}
+
+/* port: a gametype saved with its PC options (and the file's OpenCE options
+kept) */
 void playlist_profile_save_with_options(
 	long playlist_profile_index,
 	struct game_variant *variant,
 	struct game_variant_options const *options)
+{
+	byte extended[PLAYLIST_PROFILE_EXTENDED_SIZE];
+
+	playlist_profile_get_extended_options(playlist_profile_index, extended);
+	playlist_profile_save_with_extended_options(playlist_profile_index, variant, options, extended);
+}
+
+/* port: ... and with OpenCE's options (the gametype editor's OPENCE OPTIONS) */
+void playlist_profile_save_with_extended_options(
+	long playlist_profile_index,
+	struct game_variant *variant,
+	struct game_variant_options const *options,
+	byte const *extended)
 {
 	match_assert(
 		"c:\\halo\\SOURCE\\saved games\\playlist_profile.c",
@@ -583,6 +647,7 @@ void playlist_profile_save_with_options(
 			dispose_thread(playlist_profile_globals.thread);
 			playlist_profile_globals.thread = NULL;
 		}
+		csmemcpy(playlist_profile_write_extended, extended, sizeof(playlist_profile_write_extended));
 		playlist_profile_write_options = *options;
 		playlist_profile_write(playlist_profile_index, variant);
 #ifdef HALO_GAME_BROWSER
@@ -644,9 +709,20 @@ static void playlist_profile_create_default_profiles_on_disk(
 		{
 			wchar_t const *display_name;
 			boolean file_written = FALSE;
+			/* port: OpenCE's gametype's PC options and further options (written
+			after the signature below), for those of its bank */
+			boolean has_options = FALSE;
+			struct game_variant_options default_options;
+			byte default_extended[PLAYLIST_PROFILE_EXTENDED_SIZE];
 
 #ifdef HALO_GAME_BROWSER
-			if (profile_index >= NUMBER_OF_DEFAULT_PLAYLIST_PROFILES)
+			if (profile_index >= NUMBER_OF_DEFAULT_PLAYLIST_PROFILES + NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES)
+			{
+				game_modes_gametype((short)(profile_index - NUMBER_OF_DEFAULT_PLAYLIST_PROFILES -
+					NUMBER_OF_CHUPA_PORT_DEFAULT_PLAYLIST_PROFILES), &variant, &default_options, default_extended);
+				has_options = TRUE;
+			}
+			else if (profile_index >= NUMBER_OF_DEFAULT_PLAYLIST_PROFILES)
 			{
 				variant = *playlist_profile_port_defaults[profile_index - NUMBER_OF_DEFAULT_PLAYLIST_PROFILES].build(
 					&temporary);
@@ -665,16 +741,25 @@ static void playlist_profile_create_default_profiles_on_disk(
 				block,
 				&variant,
 				sizeof(struct game_variant));
-			ustrncpy(
-				(wchar_t *)block,
-				display_name,
-				MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1);
+			/* port: (OpenCE's have their own short names: game_modes.c) */
+			if (!has_options)
+			{
+				ustrncpy(
+					(wchar_t *)block,
+					display_name,
+					MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1);
+			}
 			((struct game_variant *)block)->human_readable_game_description[MAXIMUM_GAME_VARIANT_NAME_LENGTH - 1] = 0;
 			((struct game_variant *)block)->flags |= (short)(profile_index << 8);
 			saved_game_file_generate_checksum(
 				block,
 				PLAYLIST_PROFILE_CHECKSUM_DATA_SIZE,
 				(XCALCSIG_SIGNATURE *)(block + PLAYLIST_PROFILE_CHECKSUM_DATA_SIZE));
+			if (has_options)
+			{
+				playlist_profile_options_to_block(block, &default_options);
+				playlist_profile_extended_to_block(block, default_extended);
+			}
 
 			_snprintf(path, MAXIMUM_FILENAME_LENGTH, "z:\\saved\\playlists\\default_playlist\\%02d\\blam.lst", profile_index);
 			path[MAXIMUM_FILENAME_LENGTH] = 0;
@@ -880,6 +965,7 @@ static unsigned long __stdcall playlist_profile_write_thread_proc(
 				sizeof(struct game_variant),
 				(struct _XCALCSIG_SIGNATURE *)(block + sizeof(struct game_variant)));
 			playlist_profile_options_to_block(block, &playlist_profile_write_options);
+			playlist_profile_extended_to_block(block, playlist_profile_write_extended);
 
 			if (!file_set_position(&file, 0) ||
 				!file_write(&file, sizeof(block), block))
@@ -1051,3 +1137,49 @@ static void playlist_profile_options_to_block(
 typedef char verify_playlist_profile_options_fit[
 	PLAYLIST_PROFILE_OPTIONS_OFFSET + sizeof(struct playlist_profile_options_header) +
 		sizeof(struct game_variant_options) + sizeof(XCALCSIG_SIGNATURE) <= SAVED_GAME_FILE_BLOCK_SIZE ? 1 : -1];
+
+static void playlist_profile_extended_to_block(
+	byte *block,
+	byte const *extended)
+{
+	struct playlist_profile_options_header header;
+	byte *data = block + PLAYLIST_PROFILE_EXTENDED_OFFSET;
+	unsigned long size = sizeof(header) + PLAYLIST_PROFILE_EXTENDED_SIZE;
+
+	header.magic = PLAYLIST_PROFILE_EXTENDED_MAGIC;
+	header.version = PLAYLIST_PROFILE_EXTENDED_VERSION;
+	header.size = PLAYLIST_PROFILE_EXTENDED_SIZE;
+	csmemcpy(data, &header, sizeof(header));
+	csmemcpy(data + sizeof(header), extended, PLAYLIST_PROFILE_EXTENDED_SIZE);
+	saved_game_file_generate_checksum(data, size, (XCALCSIG_SIGNATURE *)(data + size));
+}
+
+static boolean playlist_profile_extended_from_block(
+	byte const *block,
+	byte *extended)
+{
+	struct playlist_profile_options_header header;
+	byte const *data = block + PLAYLIST_PROFILE_EXTENDED_OFFSET;
+	unsigned long size = sizeof(header) + PLAYLIST_PROFILE_EXTENDED_SIZE;
+	XCALCSIG_SIGNATURE checksum;
+
+	csmemcpy(&header, data, sizeof(header));
+	if (header.magic != PLAYLIST_PROFILE_EXTENDED_MAGIC || header.version != PLAYLIST_PROFILE_EXTENDED_VERSION ||
+		header.size != PLAYLIST_PROFILE_EXTENDED_SIZE)
+	{
+		return FALSE;
+	}
+	saved_game_file_generate_checksum((byte *)data, size, &checksum);
+	if (csmemcmp(&checksum, data + size, sizeof(checksum)))
+		return FALSE;
+	csmemcpy(extended, data + sizeof(header), PLAYLIST_PROFILE_EXTENDED_SIZE);
+	/* (another build's or a hand-edited file's: in range) */
+	network_rules_extended_options_sanitize(extended);
+	return TRUE;
+}
+
+typedef char verify_playlist_profile_extended_fits[
+	PLAYLIST_PROFILE_EXTENDED_OFFSET >= PLAYLIST_PROFILE_OPTIONS_OFFSET + sizeof(struct playlist_profile_options_header) +
+		sizeof(struct game_variant_options) + sizeof(XCALCSIG_SIGNATURE) &&
+	PLAYLIST_PROFILE_EXTENDED_OFFSET + sizeof(struct playlist_profile_options_header) + PLAYLIST_PROFILE_EXTENDED_SIZE +
+		sizeof(XCALCSIG_SIGNATURE) <= SAVED_GAME_FILE_BLOCK_SIZE ? 1 : -1];

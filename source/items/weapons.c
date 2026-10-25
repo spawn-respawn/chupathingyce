@@ -220,6 +220,7 @@ symbols in this file:
 #include "game/cheats.h"
 #include "game/game.h"
 #include "game/game_engine.h"
+#include "extensions/extension_api.h" /* port: a ruleset's objective weapons */
 #include "game/players.h"
 #include "interface/first_person_weapons.h"
 #include "math/periodic_functions.h"
@@ -931,9 +932,12 @@ void weapon_delete(
 		/* port: on the consoles a warning in debug.txt, and the game goes on:
 		a modded host's game that deleted the oddball stopped an Xbox here.
 		Nothing follows that the check protects */
-		match_warn("c:\\halo\\SOURCE\\items\\weapons.c", 234, !weapon_is_flag(weapon_index));
+		match_warn("c:\\halo\\SOURCE\\items\\weapons.c", 234,
+			!weapon_is_flag(weapon_index) || halo_extensions_can_delete_objective_weapon(weapon_index));
 #else
-		match_assert("c:\\halo\\SOURCE\\items\\weapons.c", 234, !weapon_is_flag(weapon_index));
+		/* port: (but an Infection zombie's skull: extensions) */
+		match_assert("c:\\halo\\SOURCE\\items\\weapons.c", 234,
+			!weapon_is_flag(weapon_index) || halo_extensions_can_delete_objective_weapon(weapon_index));
 #endif
 	}
 

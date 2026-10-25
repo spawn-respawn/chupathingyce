@@ -857,6 +857,8 @@ void network_rules_settings_layout_copy(unsigned char const *record, unsigned ch
 	int offset, int length, unsigned char *out);
 int network_rules_host_static_damage_reported(unsigned announce, unsigned delta_version);
 void network_rules_extended_options_default(unsigned char *options);
+void game_modes_pending_get(unsigned char *bytes); /* port/linux/game/game_modes.c */
+unsigned char game_modes_kind(struct game_variant const *variant);
 #ifdef HALO_GAME_BROWSER
 unsigned char delta_peer_advertised_flags(void);
 int delta_peer_game_machine_legacy_version(int machine_index);
@@ -1010,7 +1012,8 @@ static boolean network_game_server_send_settings_pieces(
 	/* (a record of another layout goes as it is) */
 	if (wire_size != NETWORK_GAME_SERVER_SETTINGS_SIZE)
 		size = wire_size;
-	network_rules_extended_options_default(further);
+	/* port: the host's gametype's OpenCE options (the defaults: none) */
+	game_modes_pending_get(further);
 	for (offset = 0; offset < size; offset += sizeof(message.data))
 	{
 		void *encoded_message;
@@ -1049,6 +1052,21 @@ boolean network_game_server_send_game_settings_to_client_machine(
 		if (slot != NONE)
 			network_game_server_settings_machines[slot].owed = TRUE;
 		return TRUE;
+	}
+	/* port: a machine of the older record has no room for OpenCE's options,
+	and would play the plain game out of step with every other: it is refused
+	before gameplay, not downgraded */
+	if (size < NETWORK_GAME_SERVER_SETTINGS_EXTENDED_SIZE)
+	{
+		unsigned char further[16];
+
+		game_modes_pending_get(further);
+		if (further[0] != 0 || further[1] != 0)
+		{
+			network_event("refusing a machine that takes the older game settings record: this game plays "
+				"OpenCE's mode %d (hardcore %d)", (int)further[0], (int)further[1]);
+			return FALSE;
+		}
 	}
 	game = network_game_server_wire_game(game, &game_size);
 	if (game_size <= 0)
@@ -2076,6 +2094,18 @@ static boolean network_game_server_handle_message_client_broadcast_game_search(
 			  void delta_peer_advertised_wire(unsigned char *reserved, int size);
 			  advertisement.reserved[HALO_PORT_ADVERTISED_FLAGS_OFFSET] |= delta_peer_advertised_flags();
 			  delta_peer_advertised_wire(advertisement.reserved, (int)sizeof(advertisement.reserved)); }
+#endif
+			/* (an OpenCE game type's kind, the server browser's name for it;
+			not while this host speaks Delta, whose major is in that byte, the
+			game wire after it, which ChupathingyCE's clients join by: OpenCE's
+			would take that for a kind) */
+#ifdef HALO_GAME_BROWSER
+			{ unsigned char delta_peer_advertised_flags(void);
+			  if (!delta_peer_advertised_flags())
+#endif
+			advertisement.reserved[HALO_PORT_ADVERTISED_KIND_OFFSET] = game_modes_kind(&game->variant);
+#ifdef HALO_GAME_BROWSER
+			}
 #endif
 			if (network_game_server_get_state(server, NULL) != _network_game_server_state_pregame ||
 				network_game_server_game_is_loading(server))

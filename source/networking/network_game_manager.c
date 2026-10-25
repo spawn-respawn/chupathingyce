@@ -79,6 +79,7 @@ symbols in this file:
 #include "cseries/cseries.h"
 #include "cseries/errors.h"
 #include "game/game.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "game/game_engine.h"
 #include "game/players.h"
 #include "interface/player_ui.h"
@@ -818,6 +819,8 @@ boolean network_game_create_game_objects(
 		game_set_game_variant(&game->variant);
 		/* port: and its PC options */
 		game_set_game_variant_options(&game->variant_options);
+		/* port: and OpenCE's (the host's choice, or the record's further options) */
+		game_modes_commit_pending(&game->variant);
 	}
 
 	if (game_load(&options))

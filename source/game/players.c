@@ -1554,6 +1554,8 @@ void network_player_attach_unit(
 	unit->object.owner_team_index = (short)player->team_index;
 	unit->unit.player_index = player_index;
 	player->unit_index = unit_index;
+	/* port: a ruleset's per-player state, which may have come before the unit */
+	halo_extensions_player_unit_attached(player_index);
 	unit_set_actively_controlled(unit_index, TRUE);
 	if (player->local_player_index != NONE)
 		player_control_new_unit(player->local_player_index, unit_index);
@@ -4600,7 +4602,11 @@ void players_update_before_game(
 						game_engine_prespawn_player_update(iterator.datum_index);
 						player_spawn(iterator.datum_index);
 						if (player->unit_index != NONE)
+						{
 							game_engine_postspawn_player_update(iterator.datum_index);
+							/* port: a ruleset's spawn equipment, after the engine's */
+							halo_extensions_postspawn_player(iterator.datum_index);
+						}
 						else
 							player->respawn_timer = 1;
 					}
@@ -4671,8 +4677,10 @@ void players_update_before_game(
 						unit_get(player->unit_index)->unit.current_weapon_index);
 					if (weapon_index != NONE && weapon_must_be_readied(weapon_index))
 					{
-						if (TEST_FLAG(action->control_flags, _unit_control_weapon_primary_trigger_bit) ||
-							TEST_FLAG(action->control_flags, _unit_control_weapon_secondary_trigger_bit))
+						/* port: (a ruleset may keep a weapon: Infection's zombie its skull) */
+						if ((TEST_FLAG(action->control_flags, _unit_control_weapon_primary_trigger_bit) ||
+							TEST_FLAG(action->control_flags, _unit_control_weapon_secondary_trigger_bit)) &&
+							halo_extensions_allow_weapon_drop(player->unit_index, weapon_index))
 						{
 							unit_drop_current_weapon(player->unit_index, TRUE);
 						}

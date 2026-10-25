@@ -131,6 +131,10 @@ int delta_legacy_maximum(void);
 then flags */
 #define HALO_PORT_ADVERTISED_VERSION_OFFSET 0
 #define HALO_PORT_ADVERTISED_FLAGS_OFFSET 2
+/* ... then the game's kind (an OpenCE game type's number, Hardcore in bit 7:
+   game_modes.h's game_modes_kind), for the server browser: only from a host
+   that does not speak Delta, whose major is in this byte */
+#define HALO_PORT_ADVERTISED_KIND_OFFSET 3
 /* ... the host plays the distributed netcode (always, since the lockstep
 netcode was removed; hosts of version 4 built before then may not) */
 #define HALO_PORT_ADVERTISED_DISTRIBUTED_FLAG 0x01

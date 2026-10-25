@@ -283,6 +283,137 @@ boolean halo_extensions_can_collect_items(long player_index)
 	return !ruleset || !ruleset->can_collect_items || ruleset->can_collect_items(player_index);
 }
 
+/* ---------- ruleset queries */
+
+#define RULESET_QUERY(call, none, expr) \
+	struct halo_ruleset const *ruleset = halo_extensions_active_ruleset(); \
+	if (!ruleset || !ruleset->call) return none; \
+	return expr
+
+boolean halo_extensions_unit_restricted(long unit_index)
+{
+	RULESET_QUERY(unit_restricted, FALSE, ruleset->unit_restricted(unit_index));
+}
+
+boolean halo_extensions_allow_weapon_drop(long unit_index, long weapon_index)
+{
+	RULESET_QUERY(allow_weapon_drop, TRUE, ruleset->allow_weapon_drop(unit_index, weapon_index));
+}
+
+boolean halo_extensions_can_delete_objective_weapon(long weapon_index)
+{
+	RULESET_QUERY(can_delete_objective_weapon, FALSE, ruleset->can_delete_objective_weapon(weapon_index));
+}
+
+real halo_extensions_melee_multiplier(long unit_index)
+{
+	RULESET_QUERY(melee_multiplier, 1.f, ruleset->melee_multiplier(unit_index));
+}
+
+boolean halo_extensions_melee_rider_target(long attacker_index, long target_index)
+{
+	RULESET_QUERY(melee_rider_target, FALSE, ruleset->melee_rider_target(attacker_index, target_index));
+}
+
+boolean halo_extensions_melee_rider_visible(long attacker_index, long target_index,
+	union real_vector3d const *direction)
+{
+	RULESET_QUERY(melee_rider_visible, TRUE, ruleset->melee_rider_visible(attacker_index, target_index, direction));
+}
+
+void halo_extensions_player_unit_attached(long player_index)
+{
+	struct halo_ruleset const *ruleset = halo_extensions_active_ruleset();
+
+	if (ruleset && ruleset->player_unit_attached)
+		ruleset->player_unit_attached(player_index);
+}
+
+boolean halo_extensions_time_remaining(long *ticks)
+{
+	RULESET_QUERY(time_remaining, FALSE, ruleset->time_remaining(ticks));
+}
+
+long halo_extensions_respawn_ticks(void)
+{
+	RULESET_QUERY(respawn_ticks, -1, ruleset->respawn_ticks());
+}
+
+boolean halo_extensions_headshot_kills(long object_index, boolean shot)
+{
+	RULESET_QUERY(headshot_kills, FALSE, ruleset->headshot_kills(object_index, shot));
+}
+
+boolean halo_extensions_write_network_state(unsigned char *buffer, long size, long *written)
+{
+	RULESET_QUERY(write_network_state, FALSE, ruleset->write_network_state(buffer, size, written));
+}
+
+boolean halo_extensions_read_network_state(unsigned char const *buffer, long size, boolean first, boolean *read)
+{
+	RULESET_QUERY(read_network_state, FALSE, ruleset->read_network_state(buffer, size, first, read));
+}
+
+boolean halo_extensions_manages_teams(void)
+{
+	struct halo_ruleset const *ruleset = halo_extensions_active_ruleset();
+
+	return ruleset && ruleset->manages_teams;
+}
+
+boolean halo_extensions_uses_ball_weapon(void)
+{
+	struct halo_ruleset const *ruleset = halo_extensions_active_ruleset();
+
+	return ruleset && ruleset->uses_ball_weapon;
+}
+
+boolean halo_extensions_hide_motion_sensor(void)
+{
+	EACH_EXTENSION(e) if (e->hide_motion_sensor && e->hide_motion_sensor()) return TRUE;
+	return FALSE;
+}
+
+boolean halo_extensions_suppress_aim_assist(void)
+{
+	EACH_EXTENSION(e) if (e->suppress_aim_assist && e->suppress_aim_assist()) return TRUE;
+	return FALSE;
+}
+
+void halo_extensions_player_killed_player(long killing_player_index, long dead_player_index, boolean friendly_fire)
+{
+	EACH_EXTENSION(e)
+		if (e->player_killed_player) e->player_killed_player(killing_player_index, dead_player_index, friendly_fire);
+}
+
+boolean halo_extensions_host_game_options(struct game_variant const *variant, struct game_variant_options *options,
+	unsigned char extended[16])
+{
+	boolean chose = FALSE;
+	EACH_EXTENSION(e)
+		if (e->host_game_options && e->host_game_options(variant, options, extended)) chose = TRUE;
+	return chose;
+}
+
+boolean halo_extensions_plays_opence_mode(long mode)
+{
+	if (mode < 0 || mode >= 32)
+		return FALSE;
+	{
+		EACH_EXTENSION(e)
+			if (e->opence_modes & (1UL << mode)) return TRUE;
+	}
+	return FALSE;
+}
+
+void halo_extensions_postspawn_player(long player_index)
+{
+	struct halo_ruleset const *ruleset = halo_extensions_active_ruleset();
+
+	if (ruleset && ruleset->postspawn_player)
+		ruleset->postspawn_player(player_index);
+}
+
 boolean halo_extensions_suppress_network_state(void)
 {
 	struct halo_ruleset const *ruleset = halo_extensions_active_ruleset();

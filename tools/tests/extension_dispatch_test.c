@@ -38,6 +38,21 @@ static boolean end_false(void) { return FALSE; }
 static boolean end_true(void) { return TRUE; }
 static boolean report(void) { return first_accept; }
 static boolean controls(long player) { return player == 7; }
+static long postspawned[4]; static int postspawn_count;
+static void postspawn_first(long player) { postspawned[postspawn_count++ & 3] = player; }
+static boolean host_options(struct game_variant const *v, struct game_variant_options *o, unsigned char x[16])
+{ (void)v; (void)o; x[0] = 3; return TRUE; }
+static boolean restricted(long u) { return u == 8; }
+static boolean allow_drop(long u, long w) { (void)u; return w != 9; }
+static real melee(long u) { (void)u; return 2.5f; }
+static boolean remaining(long *t) { *t = 77; return TRUE; }
+static long respawn(void) { return 150; }
+static boolean headshot(long o, boolean shot) { (void)o; return shot; }
+static boolean write_state(unsigned char *b, long size, long *written) { (void)b; (void)size; *written = 5; return TRUE; }
+static boolean read_state(unsigned char const *b, long size, boolean first, boolean *read) { (void)b; (void)size; *read = first; return TRUE; }
+static int hardcore_kills;
+static boolean hide(void) { return TRUE; }
+static void killed_notice(long k, long d, boolean f) { (void)k; (void)d; (void)f; hardcore_kills++; }
 static real damage(long a, long b) { (void)a; (void)b; return 2.f; }
 static void notify_first(void) { notifications = notifications * 10 + 1; }
 static void notify_second(void) { notifications = notifications * 10 + 2; }
@@ -85,7 +100,10 @@ static uint64_t revision(void) { return 3; }
 static const struct halo_ruleset first_rules = {
     .select_game_engine = select_first, .local_only = TRUE,
     .should_end_game = end_false, .damage_multiplier = damage,
-    .player_killed = killed_first, .filter_player_action = filter_first, .end_tick = tick_first
+    .unit_restricted = restricted, .allow_weapon_drop = allow_drop, .melee_multiplier = melee,
+    .time_remaining = remaining, .respawn_ticks = respawn, .headshot_kills = headshot,
+    .write_network_state = write_state, .read_network_state = read_state, .manages_teams = TRUE, .uses_ball_weapon = TRUE,
+    .player_killed = killed_first, .postspawn_player = postspawn_first, .filter_player_action = filter_first, .end_tick = tick_first
 };
 static const struct halo_ruleset second_rules = {
     .select_game_engine = select_second, .should_end_game = end_true, .player_killed = killed_second
@@ -102,16 +120,23 @@ static const struct halo_editor second_editor = {
     .dispose_from_old_map = initialize_second
 };
 const struct halo_extension first_extension = {
-    .name = "first", .objects_placed = notify_first, .ruleset = &first_rules,
+    .name = "first", .opence_modes = 1UL << 3, .host_game_options = host_options, .objects_placed = notify_first, .ruleset = &first_rules,
     .suppress_game_report = report, .player_controller = &controller, .editor = &first_editor
 };
 const struct halo_extension second_extension = {
-    .name = "second", .objects_placed = notify_second, .ruleset = &second_rules, .editor = &second_editor
+    .name = "second", .hide_motion_sensor = hide, .suppress_aim_assist = hide,
+    .player_killed_player = killed_notice, .opence_modes = 1UL << 31, .objects_placed = notify_second, .ruleset = &second_rules, .editor = &second_editor
 };
 
 static void test_ruleset_ownership(void)
 {
     boolean result = TRUE;
+    unsigned char extended[16] = {0};
+    /* OpenCE modes are declared by a ruleset, whether or not it owns a session */
+    assert(halo_extensions_plays_opence_mode(3));
+    assert(!halo_extensions_plays_opence_mode(2) && !halo_extensions_plays_opence_mode(-1) &&
+        !halo_extensions_plays_opence_mode(40));
+    assert(halo_extensions_host_game_options(&variant, NULL, extended) && extended[0] == 3);
     assert(!halo_extensions_active_ruleset());
     assert(!halo_extensions_should_end_game(&result) && result);
     assert(halo_extensions_select_game_engine(&base_engine, &variant) == &base_engine);
@@ -122,6 +147,21 @@ static void test_ruleset_ownership(void)
     assert(first_selections == 2 && second_selections == 1);
     assert(halo_extensions_active_ruleset() == &first_rules);
     assert(halo_extensions_should_end_game(&result) && !result);
+    {
+        long ticks = 0; boolean read = FALSE; unsigned char buf[4];
+        assert(halo_extensions_unit_restricted(8) && !halo_extensions_unit_restricted(1));
+        assert(halo_extensions_allow_weapon_drop(1, 2) && !halo_extensions_allow_weapon_drop(1, 9));
+        assert(halo_extensions_melee_multiplier(1) == 2.5f);
+        assert(halo_extensions_time_remaining(&ticks) && ticks == 77);
+        assert(halo_extensions_respawn_ticks() == 150);
+        assert(halo_extensions_headshot_kills(1, TRUE) && !halo_extensions_headshot_kills(1, FALSE));
+        assert(halo_extensions_write_network_state(buf, 4, &ticks) && ticks == 5);
+        assert(halo_extensions_read_network_state(buf, 4, TRUE, &read) && read);
+        assert(halo_extensions_manages_teams() && halo_extensions_uses_ball_weapon());
+        /* absent hooks have neutral answers */
+        assert(!halo_extensions_can_delete_objective_weapon(1) && !halo_extensions_melee_rider_target(1, 2));
+        assert(halo_extensions_melee_rider_visible(1, 2, NULL));
+    }
     assert(halo_extensions_suppress_network_state());
     assert(halo_extensions_suppress_game_report());
     assert(halo_extensions_damage_multiplier(1, 2) == 2.f);
@@ -132,6 +172,8 @@ static void test_ruleset_ownership(void)
     assert(halo_extensions_player_killed(1, 2));
     halo_extensions_filter_player_action(1, NULL);
     halo_extensions_end_tick();
+    halo_extensions_postspawn_player(4);
+    assert(postspawn_count == 1 && postspawned[0] == 4);
     assert(first_deaths == 1 && second_deaths == 0 && filtered_actions == 1 && committed_ticks == 1);
     halo_extensions_end_game_session();
     assert(!halo_extensions_active_ruleset());
@@ -146,6 +188,9 @@ static void test_ruleset_ownership(void)
     assert(halo_extensions_player_killed(1, 2));
     halo_extensions_filter_player_action(1, NULL);
     halo_extensions_end_tick();
+    /* second_rules has no spawn hook: it owns the session, nothing falls through */
+    halo_extensions_postspawn_player(5);
+    assert(postspawn_count == 1);
     assert(first_deaths == 1 && second_deaths == 1 && filtered_actions == 1 && committed_ticks == 1);
     assert(halo_extensions_damage_multiplier(1, 2) == 1.f);
     /* A non-game initialization clears ownership too. */
@@ -153,6 +198,16 @@ static void test_ruleset_ownership(void)
     assert(!halo_extensions_active_ruleset());
     assert(halo_extensions_can_collect_items(1));
     assert(!halo_extensions_player_killed(1, 2));
+    /* no owner: the queries are neutral, the general hooks still answer */
+    assert(!halo_extensions_unit_restricted(8) && halo_extensions_allow_weapon_drop(1, 9) &&
+        halo_extensions_melee_multiplier(1) == 1.f && halo_extensions_respawn_ticks() == -1 &&
+        !halo_extensions_manages_teams());
+    assert(halo_extensions_hide_motion_sensor() && halo_extensions_suppress_aim_assist());
+    halo_extensions_player_killed_player(1, 2, FALSE);
+    assert(hardcore_kills == 1 && halo_extensions_plays_opence_mode(31));
+    /* no owner: the spawn hook is silent */
+    halo_extensions_postspawn_player(9);
+    assert(postspawn_count == 1);
 }
 
 static void test_editor_ownership(void)
