@@ -4494,9 +4494,10 @@ static void gpu_metal_initialize(uint32_t flags, struct gpu_capabilities *capabi
 				"are decoded (this GPU has no BC formats)");
 		}
 
-		/* Native Metal capabilities. Vertex colors are swizzled by the frontend;
-		visibility uses exact counts rather than the mobile boolean path. */
-		capabilities->vertex_bgra = 0;
+		/* Vertex pulling decodes D3DCOLOR's BGRA bytes in nv2a_msl.c, including
+		specialized functions. Keep colored streams eligible for the mirror.
+		Visibility uses exact counts rather than the mobile boolean path. */
+		capabilities->vertex_bgra = 1;
 		capabilities->base_vertex = 1;
 		capabilities->triangle_fans = 1;
 		capabilities->line_loops = 1;
