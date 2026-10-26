@@ -220,6 +220,55 @@ static MetalTable *textures, *buffers, *shaders;
 static int metal_debug;
 /* debug.gpu_stats: CPU time in the stages of gpu_metal_draw */
 static struct draw_profile metal_profile;
+/* Opt-in render-thread counters. No completion callback mutates these.
+   Collection/logging is diagnostic work, not production timing evidence. */
+static struct
+{
+	BOOL enabled;
+	uint64_t draws, clipped;
+	uint64_t texture_uploads, texture_renames, preserved_levels, preserved_bytes;
+	uint64_t readbacks, readback_bytes, readback_waits;
+	uint64_t drawable_requests, slot_requests;
+	double readback_wait_seconds, drawable_wait_seconds, slot_wait_seconds;
+} work_profile;
+
+static void work_readback(uint64_t bytes, BOOL waited, double elapsed)
+{
+	if (!work_profile.enabled)
+		return;
+	work_profile.readbacks++;
+	work_profile.readback_bytes += bytes;
+	work_profile.readback_waits += waited != NO;
+	work_profile.readback_wait_seconds += elapsed;
+}
+
+static void work_wait_readback(id<MTLCommandBuffer> waited, uint64_t bytes)
+{
+	CFTimeInterval started = work_profile.enabled ? CACurrentMediaTime() : 0.0;
+
+	[waited waitUntilCompleted];
+	if (work_profile.enabled)
+		work_readback(bytes, YES, CACurrentMediaTime() - started);
+}
+
+static void work_profile_report(void)
+{
+	if (!work_profile.enabled)
+		return;
+	platform_log("Metal work: draws %llu clipped %llu", (unsigned long long)work_profile.draws,
+		(unsigned long long)work_profile.clipped);
+	platform_log("Metal work: texture uploads %llu renames %llu preserved levels %llu bytes %llu",
+		(unsigned long long)work_profile.texture_uploads, (unsigned long long)work_profile.texture_renames,
+		(unsigned long long)work_profile.preserved_levels, (unsigned long long)work_profile.preserved_bytes);
+	platform_log("Metal work: readbacks %llu bytes %llu waits %llu wait_ms %.3f",
+		(unsigned long long)work_profile.readbacks, (unsigned long long)work_profile.readback_bytes,
+		(unsigned long long)work_profile.readback_waits, work_profile.readback_wait_seconds * 1e3);
+	platform_log("Metal work: drawable requests %llu wait_ms %.3f slot requests %llu wait_ms %.3f",
+		(unsigned long long)work_profile.drawable_requests, work_profile.drawable_wait_seconds * 1e3,
+		(unsigned long long)work_profile.slot_requests, work_profile.slot_wait_seconds * 1e3);
+	memset(&work_profile, 0, sizeof(work_profile));
+	work_profile.enabled = YES;
+}
 /* display.compressed_textures, where the GPU has BC formats: DXT textures
 upload as they are, not decoded to BGRA8 (gpu_capabilities.s3tc) */
 static BOOL compressed_textures;
@@ -457,7 +506,13 @@ static void frame_begin(void)
 		return;
 	waited = CACurrentMediaTime();
 	dispatch_semaphore_wait(frame_slots, DISPATCH_TIME_FOREVER);
-	pacing_waited += CACurrentMediaTime() - waited;
+	waited = CACurrentMediaTime() - waited;
+	pacing_waited += waited;
+	if (work_profile.enabled)
+	{
+		work_profile.slot_requests++;
+		work_profile.slot_wait_seconds += waited;
+	}
 	transient_reset(&streams[frame_slot]);
 	transient_reset(&snapshots[frame_slot]);
 	frame_started = 1;
@@ -810,10 +865,19 @@ static void gpu_metal_texture_upload(gpu_texture texture, uint32_t face, uint32_
 							fromRegion:MTLRegionMake3D(0, 0, 0, w, h, d) mipmapLevel:copy_level slice:copy_face];
 						[record->texture replaceRegion:MTLRegionMake3D(0, 0, 0, w, h, d) mipmapLevel:copy_level
 							slice:copy_face withBytes:texels.bytes bytesPerRow:copy_row bytesPerImage:copy_image];
+						if (work_profile.enabled)
+						{
+							work_profile.preserved_levels++;
+							work_profile.preserved_bytes += copy_image * d;
+						}
 					}
 			}
 			if (previous)
+			{
 				renames++;
+				if (work_profile.enabled)
+					work_profile.texture_renames++;
+			}
 		}
 		width = level_dimension(description->width, level);
 		height = level_dimension(description->height, level);
@@ -821,6 +885,8 @@ static void gpu_metal_texture_upload(gpu_texture texture, uint32_t face, uint32_
 		level_layout(description->format, width, height, &row, &image);
 		if (size < image * depth)
 			return;
+		if (work_profile.enabled)
+			work_profile.texture_uploads++;
 		[record->texture replaceRegion:MTLRegionMake3D(0, 0, 0, width, height, depth) mipmapLevel:level
 			slice:description->type == GPU_TEXTURE_CUBE ? face : 0 withBytes:data bytesPerRow:row
 			bytesPerImage:image];
@@ -882,7 +948,7 @@ static uint32_t gpu_metal_texture_read(gpu_texture texture, void *pixels, uint32
 					id<MTLCommandBuffer> waited = commands;
 
 					commit(NO);
-					[waited waitUntilCompleted];
+					work_wait_readback(waited, width * height * 4);
 				}
 				memcpy(pixels, staging.contents, width * height * 4);
 				if (description->format == GPU_FORMAT_DEPTH_STENCIL)
@@ -918,7 +984,7 @@ static uint32_t gpu_metal_texture_read(gpu_texture texture, void *pixels, uint32
 				id<MTLCommandBuffer> waited = commands;
 
 				commit(NO);
-				[waited waitUntilCompleted];
+				work_wait_readback(waited, width * height * 4);
 			}
 			memcpy(pixels, staging.contents, width * height * 4);
 			for (index = 0; index < width * height; index++)
@@ -931,6 +997,7 @@ static uint32_t gpu_metal_texture_read(gpu_texture texture, void *pixels, uint32
 		{
 			[record->texture getBytes:pixels bytesPerRow:width * 4 fromRegion:MTLRegionMake2D(0, 0, width, height)
 				mipmapLevel:0];
+			work_readback(width * height * 4, NO, 0.0);
 			return 1;
 		}
 		staging = [device newBufferWithLength:width * height * 4 options:MTLResourceStorageModeShared];
@@ -945,7 +1012,7 @@ static uint32_t gpu_metal_texture_read(gpu_texture texture, void *pixels, uint32
 			id<MTLCommandBuffer> waited = commands;
 
 			commit(NO);
-			[waited waitUntilCompleted];
+			work_wait_readback(waited, width * height * 4);
 		}
 		memcpy(pixels, staging.contents, width * height * 4);
 		return 1;
@@ -3211,6 +3278,8 @@ static uint32_t gpu_metal_draw_in_pool(const struct gpu_draw *draw,
 	assert(draw != NULL);
 	assert(constants != NULL);
 	assert(uniforms != NULL);
+	if (work_profile.enabled)
+		work_profile.draws++;
 	{
 		uint64_t stage_started = draw_profile_now(&metal_profile);
 		/* (unretained: the tables and caches keep these for longer than the
@@ -3241,7 +3310,11 @@ static uint32_t gpu_metal_draw_in_pool(const struct gpu_draw *draw,
 		area = draw->scissor.width > 0 && draw->scissor.height > 0 ? draw->scissor :
 			(struct gpu_rect){ 0, 0, (int32_t)width, (int32_t)height };
 		if (!clamp_rect(&area, width, height, &scissor))
+		{
+			if (work_profile.enabled)
+				work_profile.clipped++;
 			return 1;
+		}
 		if (visibility.active && !visibility.entry_open)
 		{
 			unsigned long entry = visibility.next;
@@ -3646,7 +3719,7 @@ static CFTimeInterval pacing_schedule(id<CAMetalDrawable> drawable, uint32_t *ne
 		pacing_percentiles(pacing.wait_times, pacing.timed, &wait_median, &wait_high);
 		pacing.reported = frames;
 		platform_log("Metal: frames shown for 1/2/3/4/5+ refreshes at %.1f Hz: %lu/%lu/%lu/%lu/%lu (pacing %s); "
-			"frame CPU %.1f ms, GPU %.1f ms (medians; 95th %.1f, %.1f); slot/drawable wait %.1f ms (95th %.1f)",
+			"frame CPU %.3f ms, GPU %.3f ms (medians; 95th %.3f, %.3f); slot/drawable wait %.3f ms (95th %.3f)",
 			1.0 / period, pacing.shown[1], pacing.shown[2], pacing.shown[3],
 			pacing.shown[4], pacing.shown[5],
 			pacing.off ? "off" : pacing.refreshes == 1 ? "1 refresh" : pacing.refreshes == 2 ? "2 refreshes" :
@@ -3963,7 +4036,13 @@ static uint32_t gpu_metal_present(gpu_texture back_buffer)
 #endif
 		waited = CACurrentMediaTime();
 		drawable = [layer nextDrawable];
-		pacing_waited += CACurrentMediaTime() - waited;
+		waited = CACurrentMediaTime() - waited;
+		pacing_waited += waited;
+		if (work_profile.enabled)
+		{
+			work_profile.drawable_requests++;
+			work_profile.drawable_wait_seconds += waited;
+		}
 		/* nil in the background: the frame still commits, so its slot is
 		freed */
 		if (drawable && record && record->texture)
@@ -4036,6 +4115,8 @@ static uint32_t gpu_metal_present(gpu_texture back_buffer)
 		}
 		if (metal_debug && frames % 600 == 300)
 			pass_log = [NSMutableString string];
+		if (frames % 600 == 0)
+			work_profile_report();
 		if (frames % 600 == 0 && renames)
 		{
 			platform_log("Metal: %lu renames in the last 600 frames", renames);
@@ -4359,6 +4440,11 @@ static void gpu_metal_initialize(uint32_t flags, struct gpu_capabilities *capabi
 		memset(capabilities, 0, sizeof(*capabilities));
 		metal_debug = (flags & GPU_INITIALIZE_DEBUG) != 0;
 		metal_profile.enabled = (flags & GPU_INITIALIZE_DRAW_PROFILE) != 0;
+		memset(&work_profile, 0, sizeof(work_profile));
+		const char *work = getenv("HALO_METAL_WORK_PROFILE");
+		work_profile.enabled = work && !strcmp(work, "1");
+		if (work_profile.enabled)
+			platform_log("Metal: work profiling enabled (diagnostic counters)");
 		/* All front-cache references are borrowed from the device's owning
 		dictionaries. Forget them before those dictionaries are replaced. */
 		memset(&pipeline_cache, 0, sizeof(pipeline_cache));

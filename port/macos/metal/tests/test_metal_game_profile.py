@@ -2,7 +2,14 @@
 import unittest
 from typing import Any
 
-from tools.metal_game_profile import BACKEND, FRONTEND, aggregate, overrides, summarize
+from tools.metal_game_profile import (
+    BACKEND,
+    FRONTEND,
+    aggregate,
+    memory_summary,
+    overrides,
+    summarize,
+)
 
 
 def fixture(attribution=True, bots=2):
@@ -70,6 +77,31 @@ class GameProfileTests(unittest.TestCase):
         self.assertEqual(summary["bloodgulch/attribution/candidate"]["frame"]["cpu_median_ms"], 5.5)
         self.assertNotIn("frontend_ns_per_call", summary["bloodgulch/throughput/candidate"])
 
+    def test_visible_window_and_wait_geometry_metrics(self):
+        self.assertEqual(overrides("bloodgulch", False, window="visible")["HALO_HIDDEN_WINDOW"], "0")
+        self.assertEqual(overrides("bloodgulch", False)["HALO_HIDDEN_WINDOW"], "1")
+        text = fixture().replace("100 draws, 10 immediate", "100 draws, 10 immediate; 512 KB mirrored, 64 KB streamed")
+        text += "\n" + "\n".join(f"slot/drawable wait {i}.0 ms (95th {i + 10}.0)" for i in range(1, 7))
+        report = summarize(text, True, 2)
+        self.assertEqual(report["geometry_kib"], {"mirrored_reference": 512, "streamed": 64})
+        self.assertEqual(report["frame"]["slot_drawable_wait_median_ms"], 4.5)
+        self.assertEqual(report["frame"]["slot_drawable_wait_window_p95_ms"], 14.5)
+        row = dict(report, scene="bloodgulch", mode="attribution", variant="candidate")
+        self.assertEqual(aggregate([row])["bloodgulch/attribution/candidate"]["geometry_kib"], report["geometry_kib"])
+
+    def test_sparse_memory_samples_do_not_confuse_rss_with_footprint(self):
+        self.assertEqual(memory_summary([{"children": []}]), {})
+        samples = [{"children": [{"rss_kib": i * 1024, "footprint_bytes": i * 2**21}]} for i in range(1, 7)]
+        report = memory_summary(samples)
+        self.assertEqual(report["rss_warm_median_mib"], 4.5)
+        self.assertEqual(report["footprint_warm_median_mib"], 9)
+        self.assertEqual(report["footprint_sampled_peak_mib"], 12)
+        row = dict(summarize(fixture(False), False, 2), memory=report,
+                   scene="bloodgulch", mode="throughput", variant="candidate")
+        self.assertEqual(aggregate([row])["bloodgulch/throughput/candidate"]["memory_medians_of_runs"]["footprint_sampled_peak_mib"], 12)
+        del samples[0]["children"][0]["footprint_bytes"]
+        self.assertNotIn("footprint_sampled_peak_mib", memory_summary(samples))
+
     def test_controls_combat_bot_count_score_and_timer_mode(self):
         attributed = overrides("hangemhigh", True, 31)
         throughput = overrides("hangemhigh", False, 31)
@@ -77,6 +109,7 @@ class GameProfileTests(unittest.TestCase):
         self.assertEqual(attributed["HALO_NETWORK_TEST_SCORE"], "32767")
         self.assertEqual(attributed["HALO_NETWORK_TEST_KILL"], "0")
         self.assertEqual(throughput["HALO_GPU_STATS"], "0")
+        self.assertEqual(throughput["HALO_METAL_WORK_PROFILE"], "0")
         self.assertEqual({k: v for k, v in attributed.items() if k != "HALO_GPU_STATS"},
                          {k: v for k, v in throughput.items() if k != "HALO_GPU_STATS"})
 

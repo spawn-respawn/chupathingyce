@@ -6,6 +6,7 @@ Requires macOS, game data and HALO_ALLOW_LAUNCH=1. Never builds or edits config.
 """
 import argparse
 import contextlib
+import ctypes
 import hashlib
 import json
 import os
@@ -75,12 +76,29 @@ def tail_text(path, size=65536):
 
 
 def child_rss(pid):
-    """RSS of the shell runner's direct child (exec'd game), not GPU residency."""
+    """Sample the actual game below runner/perl shells, not wrapper RSS or GPU residency."""
     try:
-        result = subprocess.run(["ps", "-axo", "pid=,ppid=,rss="], check=True,
+        result = subprocess.run(["ps", "-axo", "pid=,ppid=,rss=,comm="], check=True,
                                 capture_output=True, text=True, timeout=3)
-        children = [tuple(map(int, row.split())) for row in result.stdout.splitlines() if row.strip()]
-        return [{"pid": child, "rss_kib": rss} for child, parent, rss in children if parent == pid]
+        rows = [row.split(maxsplit=3) for row in result.stdout.splitlines() if row.strip()]
+        descendants = {pid}
+        for _ in range(len(rows)):
+            found = {int(child) for child, parent, _, _ in rows if int(parent) in descendants}
+            if found <= descendants:
+                break
+            descendants.update(found)
+        children = [{"pid": int(child), "rss_kib": int(rss)} for child, _, rss, command in rows
+                    if int(child) in descendants and Path(command).name == "halo"]
+        if sys.platform == "darwin":
+            libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+            libproc.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+            libproc.proc_pid_rusage.restype = ctypes.c_int
+            for child in children:
+                # SDK rusage_info_v2: UUID[16], then uint64 fields; footprint is slot 9.
+                usage = (ctypes.c_uint64 * 20)()
+                if libproc.proc_pid_rusage(child["pid"], 2, ctypes.byref(usage)) == 0:
+                    child["footprint_bytes"] = usage[9]
+        return children
     except (OSError, ValueError, subprocess.SubprocessError):
         return []
 

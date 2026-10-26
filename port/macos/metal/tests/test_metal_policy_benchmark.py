@@ -1,6 +1,8 @@
 """Benchmark parser tests; never launch the game."""
 import runpy
 import unittest
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 # Load the standalone CLI without depending on tools being an installed package.
 from metal_paths import ROOT
@@ -39,6 +41,23 @@ class BenchmarkParserTests(unittest.TestCase):
                           text.replace("KB mirrored", "missing")):
             with self.subTest(log=malformed[:60]), self.assertRaises(ValueError):
                 summarize(malformed, 1)
+
+    def test_memory_sampler_follows_wrappers_and_excludes_unrelated_games(self):
+        rows = "10 1 20 /bin/sh\n11 10 30 /bin/sh\n12 11 12345 /tmp/halo\n13 1 99999 /tmp/halo\n"
+        with patch("subprocess.run", return_value=SimpleNamespace(stdout=rows)), patch("sys.platform", "linux"):
+            self.assertEqual(benchmark["child_rss"](10), [{"pid": 12, "rss_kib": 12345}])
+
+    def test_memory_sampler_reports_physical_footprint_separately(self):
+        library = MagicMock()
+        def rusage(pid, flavor, usage):
+            self.assertEqual((pid, flavor), (12, 2))
+            usage._obj[9] = 987654
+            return 0
+        library.proc_pid_rusage.side_effect = rusage
+        with patch("subprocess.run", return_value=SimpleNamespace(stdout="12 10 12345 /tmp/halo\n")), \
+                patch("sys.platform", "darwin"), patch("ctypes.CDLL", return_value=library):
+            self.assertEqual(benchmark["child_rss"](10),
+                             [{"pid": 12, "rss_kib": 12345, "footprint_bytes": 987654}])
 
     def test_rejects_render_errors(self):
         for error in ("validation error", "fault at 0x1234", "command buffer 7 failed"):

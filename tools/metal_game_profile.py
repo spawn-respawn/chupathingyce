@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Profile actual reference/candidate gameplay, not the offscreen backend fixture.
 
-Hidden/offline launches require HALO_ALLOW_LAUNCH=1. Output contains isolated
+Offline desktop launches require HALO_ALLOW_LAUNCH=1. Use --window visible for
+throughput, hidden only as a diagnostic control. Output contains isolated
 configs/logs, executable hashes, exact commands and per-run window summaries.
 Attribution and instrumentation-disabled frame runs are separate. Window p95s
 are not pooled frame percentiles; scripted motion is not deterministic replay.
@@ -74,6 +75,10 @@ def summarize(text, attribution, bots=0):
         ("cpu_median_ms", "gpu_median_ms", "cpu_window_p95_ms", "gpu_window_p95_ms"))}
     result = {"bots_joined": joins, "max_tick": max(ticks), "frame": {**frame, "windows": len(frames)},
               "render_sizes": sorted({(int(width), int(height)) for width, height in sizes})}
+    waits = warmed(re.findall(r"slot/drawable wait ([\d.]+) ms \(95th ([\d.]+)\)", text))
+    if waits:
+        result["frame"]["slot_drawable_wait_median_ms"] = statistics.median(float(r[0]) for r in waits)
+        result["frame"]["slot_drawable_wait_window_p95_ms"] = statistics.median(float(r[1]) for r in waits)
     if not attribution:
         if re.search(r"draw cpu:\s*call\s+\d+ calls", text):
             raise ValueError("draw-stage timers enabled in throughput run")
@@ -85,6 +90,10 @@ def summarize(text, attribution, bots=0):
         raise ValueError("missing geometry counts")
     result["draws_per_frame"] = statistics.median(int(r[1]) + int(r[2]) for r in geometry)
     result["retained_frontend_frames"] = len(geometry) * 60
+    byte_rows = warmed(re.findall(r"frame \d+: [^\n]*?; (\d+) KB mirrored, (\d+) KB streamed", text))
+    if byte_rows:
+        result["geometry_kib"] = {name: statistics.median(int(r[i]) for r in byte_rows)
+                                  for i, name in enumerate(("mirrored_reference", "streamed"))}
     binds = warmed(re.findall(r"Metal draw cpu: (\d+) attribute tables bound for (\d+) draws", text))
     result["attribute_binds_per_draw"] = statistics.median(int(a) / int(b) for a, b in binds if int(b))
     cache = {}
@@ -94,6 +103,23 @@ def summarize(text, attribution, bots=0):
         if hits + misses:  # disabled domains report 0/0
             cache[name] = {"hits": hits, "misses": misses, "hit_fraction": hits / (hits + misses)}
     result["cache"] = cache
+    return result
+
+
+def memory_summary(samples):
+    """Sparse process samples, not GPU residency or a lifetime high-water guarantee."""
+    rows = [row for row in samples if row["children"]]
+    if not rows:
+        return {}
+    warm = warmed(rows)
+    result = {"samples": len(rows),
+              "rss_warm_median_mib": statistics.median(sum(c["rss_kib"] for c in r["children"]) / 1024 for r in warm),
+              "rss_sampled_peak_mib": max(sum(c["rss_kib"] for c in r["children"]) / 1024 for r in rows)}
+    if all("footprint_bytes" in child for row in rows for child in row["children"]):
+        result["footprint_warm_median_mib"] = statistics.median(
+            sum(c["footprint_bytes"] for c in r["children"]) / 2**20 for r in warm)
+        result["footprint_sampled_peak_mib"] = max(
+            sum(c["footprint_bytes"] for c in r["children"]) / 2**20 for r in rows)
     return result
 
 
@@ -108,11 +134,18 @@ def aggregate(runs):
         result = {"runs": len(rows), "frame": {
             field: statistics.median(row["frame"][field] for row in rows)
             for field in rows[0]["frame"] if field != "windows"}}
+        if all(row.get("memory") for row in rows):
+            result["memory_medians_of_runs"] = {
+                name: statistics.median(row["memory"][name] for row in rows)
+                for name in rows[0]["memory"] if name != "samples" and all(name in row["memory"] for row in rows)}
         for domain in ("frontend", "backend"):
             if domain in rows[0]:
                 result[domain + "_ns_per_call"] = {
                     stage: statistics.median(row[domain][stage]["median_ns_per_call"] for row in rows)
                     for stage in rows[0][domain]}
+        if "geometry_kib" in rows[0]:
+            result["geometry_kib"] = {name: statistics.median(row["geometry_kib"][name] for row in rows)
+                                      for name in rows[0]["geometry_kib"]}
         if "draws_per_frame" in rows[0]:
             result["draws_per_frame"] = statistics.median(row["draws_per_frame"] for row in rows)
             result["attribute_binds_per_draw"] = statistics.median(row["attribute_binds_per_draw"] for row in rows)
@@ -123,14 +156,15 @@ def aggregate(runs):
     return summary
 
 
-def overrides(scene, attribution, bots=31):
-    return {"HALO_BOTS": str(bots), "HALO_NETWORK_TEST_SCORE": "32767", "HALO_NETWORK_TEST_KILL": "0",
+def overrides(scene, attribution, bots=31, window="hidden"):
+    return {"HALO_HIDDEN_WINDOW": "0" if window == "visible" else "1",
+            "HALO_BOTS": str(bots), "HALO_NETWORK_TEST_SCORE": "32767", "HALO_NETWORK_TEST_KILL": "0",
             "HALO_GPU_STATS": "1" if attribution else "0", "HALO_RENDER_REGRESSION": "1",
             "HALO_NETWORK_TEST": f"host:{scene}", "HALO_NETWORK_TEST_START": "2", "HALO_TEST_INPUT": "bot:1",
             "HALO_WINDOW_SIZE": "1280x720", "HALO_DISPLAY_MODE": "windowed", "HALO_RESOLUTION_SCALING": "native",
             "HALO_ANTI_ALIASING": "off", "HALO_PER_PIXEL_LIGHTING": "false", "HALO_FRAME_PACING": "off",
             "HALO_NO_VSYNC": "1", "HALO_MAX_FPS": "-1", "HALO_METAL_STATE_CACHE": "true",
-            "MTL_DEBUG_LAYER": "0"}
+            "HALO_METAL_WORK_PROFILE": "0", "MTL_DEBUG_LAYER": "0"}
 
 
 def main(argv=None):
@@ -143,6 +177,8 @@ def main(argv=None):
     parser.add_argument("--bots", type=int, default=31)
     parser.add_argument("--repeats", type=int, default=2, help="independent runs per variant, scene and mode")
     parser.add_argument("--modes", nargs="+", choices=("attribution", "throughput"), default=["attribution", "throughput"])
+    parser.add_argument("--window", choices=("hidden", "visible"), default="hidden",
+                        help="visible for compositor-valid throughput; hidden is a diagnostic control")
     parser.add_argument("--warm-lists", type=Path, help="copy identical learned shader lists into each isolated run")
     args = parser.parse_args(argv)
     if os.environ.get("HALO_ALLOW_LAUNCH") != "1" or platform.system() != "Darwin":
@@ -166,6 +202,7 @@ def main(argv=None):
     report = {"commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "dirty": subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True),
               "system": platform.platform(), "seconds": args.seconds, "bots": args.bots,
+              "window": args.window,
               "apps": {name: {"path": str(app), "sha256": hashlib.sha256(app.read_bytes()).hexdigest()}
                        for name, app in apps.items()}, "runs": []}
     if args.warm_lists:
@@ -181,7 +218,7 @@ def main(argv=None):
                     folder = output / f"{scene}-{mode}-{repeat + 1}-{variant}"
                     if args.warm_lists:
                         shutil.copytree(args.warm_lists, folder / "data/metal-shader-lists")
-                    options = overrides(scene, mode == "attribution", args.bots)
+                    options = overrides(scene, mode == "attribution", args.bots, args.window)
                     command = [str(ROOT / "tools/metal_scripted_run.sh"), str(folder), str(args.seconds)]
                     command += [f"{key}={value}" for key, value in options.items()]
                     print(f"RUN {len(report['runs']) + 1}/{total}: {scene}, {variant}, {mode}", flush=True)
@@ -190,7 +227,8 @@ def main(argv=None):
                     text = (folder / "run.log").read_text(errors="replace")
                     summary = summarize(text, mode == "attribution", args.bots)
                     row = {"scene": scene, "variant": variant, "mode": mode, "repeat": repeat + 1,
-                           "command": command, "folder": str(folder), "process_samples": samples, **summary}
+                           "command": command, "folder": str(folder), "process_samples": samples,
+                           "memory": memory_summary(samples), **summary}
                     report["runs"].append(row)
                     report["summary"] = aggregate(report["runs"])
                     (output / "results.json").write_text(json.dumps(report, indent=2) + "\n")
