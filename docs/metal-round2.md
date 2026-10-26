@@ -464,3 +464,25 @@ run. The single worker already finishes ahead of use, so prioritization or a
 second worker would save nothing measurable on this hardware. Decision: no
 change. Map-load duration and peak memory were not measured; revisit only if
 load profiles show the decode thread is a bottleneck. Artifacts: `/tmp/hud-run-{1,2,3}`.
+
+### Campaign (single-player co-op) BGRA comparison
+
+Campaign levels launch via `HALO_NETWORK_TEST=host:<level>:coop` (one local
+player, no input, campaign AI active), visible window, interpolation on, native
+resolution, same saved executables as the combat tests (BGRA off = `232e6ba`,
+on = BGRA build). 40-second runs, ABBA, 2 per cell. Medians, ms:
+
+| Level | Variant | CPU | GPU | Backend draws/frame | Footprint MiB |
+| --- | --- | ---: | ---: | ---: | ---: |
+| a10 | BGRA off | 0.85 | 0.60 | 417 | 542 |
+| a10 | BGRA on | 0.875 | 0.60 | 428 | 544 |
+| b30 | BGRA off | 1.025 | 0.925 | 344 | 540 |
+| b30 | BGRA on | 1.00 | 1.00 | 339 | 544 |
+
+Draw counts match within ~3%. **No difference beyond the 0.05 ms timer
+resolution/noise in either direction.** Attribution runs on a10 failed the
+profiler's minimum-window check because the streaming-upload stage was barely
+exercised for both builds, so the CPU-swizzle path BGRA removes is essentially
+idle in campaign content; b30 attribution is identical (1.05 / 1.05 ms).
+Conclusion: BGRA is neutral in campaign scenes. Artifacts:
+`/tmp/metal-campaign/results.json`, runner `/tmp/run-campaign.py`.
