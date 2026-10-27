@@ -445,6 +445,8 @@ symbols in this file:
 /* ---------- headers */
 
 #include "cseries.h"
+#include "extensions/extension_api.h" /* port: extensions' gametype options */
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "bungie_net/common/message_header.h"
 #include "bungie_net/network/transport.h"
 #include "bungie_net/network/transport_address_constants.h"
@@ -481,8 +483,8 @@ symbols in this file:
 /* port: internet play's Discord presence (port/linux/src/p2p.c), and the
 server browser's listing of a public game (p2p_lobby.c) */
 void p2p_set_game_player_counts(int count, int maximum);
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int in_progress, int has_teams);
+void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type,
+	unsigned char kind, int open, int in_progress, int has_teams);
 #ifdef HALO_GAME_BROWSER
 /* port: Delta Peer (port/linux/src/delta_peer.h), beside the game's
 protocol, which it leaves as it is: the hosted game's machines and players
@@ -1468,8 +1470,9 @@ static void network_game_server_list(
 		snprintf(gametype + length, sizeof(gametype) - length, " %s", difficulty_names[game->difficulty]);
 	}
 	/* (the scenario's name, not its path: the listing has 32 characters) */
-	p2p_set_game_listing(name, tag_name_strip_path(game->map.name), gametype, game->variant.game_engine_index, open,
-		in_progress, game->variant.universal_variant.teams);
+	/* port: (and its OpenCE game type's kind: game_modes.c) */
+	p2p_set_game_listing(name, tag_name_strip_path(game->map.name), gametype, game->variant.game_engine_index,
+		game_modes_kind(&game->variant), open, in_progress, game->variant.universal_variant.teams);
 }
 
 boolean network_game_server_idle(
@@ -4328,10 +4331,26 @@ static void network_game_server_variant_options(
 {
 	struct game_variant chosen;
 
-	if (player_ui_game_variant_specified(&chosen) && !csmemcmp(&chosen, variant, sizeof(chosen)))
+	boolean menus = player_ui_game_variant_specified(&chosen) && !csmemcmp(&chosen, variant, sizeof(chosen));
+
+	if (menus)
 		*options = *player_ui_get_game_variant_options();
 	else
 		game_variant_options_default(variant, options);
+	/* port: OpenCE's options for this game: the menus' gametype's (its mode,
+	Hardcore), else none; an extension may choose them too (the record sends
+	them to every machine) */
+	game_modes_pending_clear();
+	{
+		unsigned char extended[16];
+
+		if (menus)
+			csmemcpy(extended, player_ui_get_game_variant_extended_options(), sizeof(extended));
+		else
+			game_modes_options_default_bytes(extended);
+		if (halo_extensions_host_game_options(variant, options, extended))
+			game_modes_pending_set(extended);
+	}
 }
 
 /**

@@ -18,7 +18,7 @@ false details:
 	password's key, 56: p2p_seal_token; a tombstone's zero), players, most
 	players, the gametype's engine (1 each), the game's name,
 	map and gametype (a length byte, then up to 32, 32 and 24 characters of
-	printable ASCII), a stamp (8, reserved: zero), and the signature (64) of
+	printable ASCII), a stamp (8: the game's kind, then reserved zeros), and the signature (64) of
 	"hceu-lobby-1" and all before it.
 
 Each host has a slot, hceu/3/lobby/s/<its key's hash in hex>: its listing,
@@ -168,6 +168,8 @@ static struct
 	char map[P2P_LISTING_MAP_SIZE + 1];
 	char gametype[P2P_LISTING_GAMETYPE_SIZE + 1];
 	int engine_type;
+	/* the game's kind (the stamp's first byte: game_modes_kind) */
+	unsigned char kind;
 	int flags;
 	/* a dedicated server hosts (p2p_set_hosting_dedicated) */
 	int dedicated;
@@ -307,6 +309,7 @@ static int listing_make(unsigned char *bytes, int flags)
 	size += put_text(bytes + size, lobby.map, P2P_LISTING_MAP_SIZE);
 	size += put_text(bytes + size, lobby.gametype, P2P_LISTING_GAMETYPE_SIZE);
 	memset(bytes + size, 0, STAMP_SIZE);
+	bytes[size] = lobby.kind;
 	size += STAMP_SIZE;
 	memcpy(data, signature_label, sizeof(signature_label) - 1);
 	memcpy(data + sizeof(signature_label) - 1, signed_part, (size_t)size);
@@ -842,8 +845,8 @@ void p2p_set_hosting_password(const char *password)
 	memset(key, 0, sizeof(key));
 }
 
-void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type, int open,
-	int in_progress, int has_teams)
+void p2p_set_game_listing(const char *name, const char *map, const char *gametype, int engine_type,
+	unsigned char kind, int open, int in_progress, int has_teams)
 {
 	char new_name[P2P_LISTING_NAME_SIZE + 1];
 	char new_map[P2P_LISTING_MAP_SIZE + 1];
@@ -858,7 +861,7 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	/* (only the game's server writes these: unchanged, it need not wait for
 	the lock) */
 	if (!strcmp(new_name, lobby.name) && !strcmp(new_map, lobby.map) && !strcmp(new_gametype, lobby.gametype) &&
-		engine_type == lobby.engine_type && flags == lobby.flags)
+		engine_type == lobby.engine_type && kind == lobby.kind && flags == lobby.flags)
 	{
 		return;
 	}
@@ -867,6 +870,7 @@ void p2p_set_game_listing(const char *name, const char *map, const char *gametyp
 	memcpy(lobby.map, new_map, sizeof(lobby.map));
 	memcpy(lobby.gametype, new_gametype, sizeof(lobby.gametype));
 	lobby.engine_type = engine_type;
+	lobby.kind = kind;
 	lobby.flags = flags;
 	if (lobby.listed)
 		republish_soon(0);

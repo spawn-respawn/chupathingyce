@@ -221,6 +221,7 @@
 	</strings>
 	<strings name="main_menu/gametype_select/var_gametype_banks">
 		<string text="STANDARD"/>
+		<string text="OPENCE"/>
 		<string text="CUSTOM"/>
 	</strings>
 	<strings name="main_menu/main_menu_options">
@@ -890,6 +891,7 @@
 		<string text="Choose which interface indica-\ntors are available while playing \nthis gametype.\nThis gametype:"/>
 		<string text="Modify gameplay options and\nrules used by teamplay game\nmodes.\nThis gametype:"/>
 		<string text="Save changes you've made to\nthis gametype and return to\nthe previous screen.\nThis gametype:"/>
+		<string text="Choose the rules of OpenCE's\ngametypes: SWAT, Infection,\nGun Game and Hardcore.\nThis gametype:"/>
 	</strings>
 	<strings name="main_menu/settings_select/multiplayer_setup/playlist_edit/playlist_edit_options">
 		<string text="CHANGE NAME"/>

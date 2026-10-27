@@ -1,0 +1,191 @@
+{
+  "schema": 1,
+  "feature": "gun_game",
+  "source": {
+    "repository": "OpenCommunityEdition/OpenCE",
+    "files": {
+      "port/linux/game/gun_game.c": {
+        "base_blob": "5f553640afc07baf75e7557a9fb5bb66be56960e",
+        "integration": "adapted",
+        "local": "source/features/gun_game/gun_game.c",
+        "notes": "options read from game_variant_extended_options; engine selected by the extension ruleset; spawn weapon is postspawn_player; gameplay unchanged"
+      },
+      "port/linux/game/gun_game.h": {
+        "base_blob": "e1cc301a4ac4ddc98a0fa1c5b74e3a4bfedd7436",
+        "integration": "dropped",
+        "why": "its two entry points are the extension ruleset (select_game_engine, postspawn_player); level accessors had no other user"
+      }
+    }
+  },
+  "contract": {
+    "settings_layout": "opence_extended_options_v35",
+    "options_bytes": "0x1C..0x2B of game_variant_options",
+    "mode_byte_offset": "0x1C",
+    "legacy_clients": "host refuses a machine taking the 13,120-byte record when an OpenCE mode is pending (network_server_message_handler.c)",
+    "base_engine": "slayer",
+    "teams": false,
+    "mode": 3,
+    "weapon_order_offset": "0x24",
+    "weapon_order": {
+      "0": "strongest_first",
+      "1": "weakest_first",
+      "2": "random_host_drawn"
+    },
+    "melee_demotes_offset": "0x25",
+    "progression": "slayer_individual_score",
+    "win": "score == weapon count",
+    "score_replication": "slayer",
+    "inventory_replication": "native_objects",
+    "weapon_authority": "host",
+    "pickups": "denied",
+    "kill_path": "engine player_killed_player wrapper, not halo_ruleset.player_killed",
+    "spawn_hook": "halo_ruleset.postspawn_player",
+    "options_storage": "game_variant_extended_options beside the 0x1C game_variant_options (not one 0x2C struct); the network record is 35 layout via network_rules further options",
+    "host_selection": "config gun_game.host (free for all Slayer only); no menu bank yet",
+    "menus": "OPENCE bank of Select Gametype lists the built-in gametypes (game_modes.c); options screen not brought over (config <mode>.* settings instead)"
+  },
+  "watch": [
+    {
+      "path": "port/linux/game/game_modes.c",
+      "base_blob": "5dd330490efb93259f7de4b4c92d36dd851aacd9"
+    },
+    {
+      "path": "source/game/game_engine.c",
+      "base_blob": "1c2fcc02aa4d4a74b31abf6a0ddfb5d41400842a"
+    },
+    {
+      "path": "source/game/game_engine.h",
+      "base_blob": "84eaa4eb5773d468f06b3342103a30afe4da95b3"
+    },
+    {
+      "path": "source/game/game_engine_slayer.c",
+      "base_blob": "644781093a519b7fda34d37483c8554a4d2bf31a"
+    },
+    {
+      "path": "source/game/game_engine_slayer.h",
+      "base_blob": "e03e1ffc4b93b664fccf4c9c64b5b1a5ffbad327"
+    },
+    {
+      "path": "source/objects/damage.c",
+      "base_blob": "fcbfef07f36e80c7f2368ea1c036e9a584b7ae8b"
+    },
+    {
+      "path": "source/networking/network_game_manager.c",
+      "base_blob": "0bff82a240250c73ea477bc8134977c9b1bde3d6"
+    },
+    {
+      "path": "port/linux/game/network_rules.c",
+      "repo": "local",
+      "base_blob": "62aad9e41e46b71b7f344532d1b24f5b1cb6de0d"
+    },
+    {
+      "path": "port/linux/game/network_rules.h",
+      "repo": "local",
+      "base_blob": "76eddacd7aafad8cbc74c225022f2669f09ec6b3"
+    },
+    {
+      "path": "source/game/players.c",
+      "repo": "local",
+      "base_blob": "358046b456eadeebba6464833873bb00dbf21fe6"
+    },
+    {
+      "path": "source/units/units.c",
+      "repo": "local",
+      "base_blob": "b663e529516f29be04429f50f40c75a2467d01bb"
+    },
+    {
+      "path": "source/items/weapons.c",
+      "repo": "local",
+      "base_blob": "a21b206f3511a0ff28aa010e4451aa7d7f3b03eb"
+    },
+    {
+      "path": "source/objects/objects.c",
+      "repo": "local",
+      "base_blob": "ed702d168c5a77c11a6e47f3548f52d8ec246272"
+    },
+    {
+      "path": "source/game/aim_assist.c",
+      "repo": "local",
+      "base_blob": "7eeec89c27413c5cb130a419678362379417c4d5"
+    },
+    {
+      "path": "port/linux/game/network_damage.c",
+      "repo": "local",
+      "base_blob": "550495119af720121e958594ec54c287cfd3516b"
+    },
+    {
+      "path": "source/extensions/extension_api.h",
+      "repo": "local",
+      "base_blob": "6da25dc3e91b1d4a854dc6e4584f0ce7d8e8d7c2"
+    },
+    {
+      "path": "source/extensions/extension_dispatch.c",
+      "repo": "local",
+      "base_blob": "ea78741bca6f5362622903868060d54577dcc05d"
+    },
+    {
+      "path": "source/networking/network_server_message_handler.c",
+      "repo": "local",
+      "base_blob": "388825aef65c71eb3784695d6b5e8a23dbd9172a"
+    },
+    {
+      "path": "source/networking/network_client_message_handler.c",
+      "repo": "local",
+      "base_blob": "2c5d1bb6107cbccb40012aea3e046f7496bd1bf1"
+    },
+    {
+      "path": "source/networking/network_server_manager.c",
+      "repo": "local",
+      "base_blob": "a1304f858411b85a0dde48515550e03608b37925"
+    },
+    {
+      "path": "source/saved games/playlist_profile.c",
+      "repo": "local",
+      "base_blob": "ddf68387d003a3c9c9218f89bebf78a8f893e82f",
+      "seen_blob": "7d7afb7a0caf9d2668706990427f1d625a0bf20a"
+    }
+  ],
+  "verification": {
+    "status": "contract_verified",
+    "required": [
+      "gun_game_wire_vectors",
+      "gun_game_integration",
+      "gun_game_rules",
+      "gun_game_host_crossplay",
+      "gun_game_client_crossplay"
+    ],
+    "tests": {
+      "gun_game_wire_vectors": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "vector or offsets",
+        "what": "OpenCE's 16 option bytes at 0x1C..0x2B: mode, order, melee, Hardcore, sanitizing, engine/teams rules"
+      },
+      "gun_game_integration": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "integration_points or engine_does_not_name or kind_is_advertised or keeps_slayer or stock_default",
+        "what": "the engine's hooks and OPENCE menu wiring exist; stock profiles unchanged"
+      },
+      "gun_game_rules": {
+        "kind": "pytest",
+        "id": "tools/test_compat_wire.py",
+        "k": "test_mode_rules and gun_game or weapon_list_is_opences",
+        "what": "the mode's rules as decisions on plain numbers: level from score, list order and length, win, melee demotion once, floor at 0, refills, pickups, host-drawn random order"
+      },
+      "gun_game_host_crossplay": {
+        "kind": "manual",
+        "what": "this build hosts, an OpenCE client plays a match"
+      },
+      "gun_game_client_crossplay": {
+        "kind": "manual",
+        "what": "an OpenCE host, this build joins and plays a match"
+      }
+    },
+    "passed": [
+      "gun_game_wire_vectors",
+      "gun_game_integration",
+      "gun_game_rules"
+    ]
+  }
+}

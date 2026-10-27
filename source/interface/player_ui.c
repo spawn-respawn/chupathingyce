@@ -238,6 +238,15 @@ static struct
 	struct game_variant_options current;
 } player_ui_edit_options;
 static struct game_variant_options player_ui_multiplayer_options;
+/* port: and OpenCE's further options (16 bytes) of the same gametype */
+static unsigned char player_ui_multiplayer_extended[16];
+/* ... and those of the gametype being edited */
+static struct
+{
+	unsigned char original[16];
+	unsigned char current[16];
+} player_ui_edit_extended;
+void game_modes_options_default_bytes(unsigned char *bytes); /* port/linux/game/game_modes.c */
 static char player1_profile_path[0x100] = { 0 };
 
 /* ---------- public code */
@@ -391,6 +400,13 @@ struct game_variant_options *player_ui_get_edit_playlist_options(
 	return player_ui_get_edit_playlist_profile() ? &player_ui_edit_options.current : NULL;
 }
 
+/* port: OpenCE's options of the gametype being edited (16 bytes) */
+unsigned char *player_ui_get_edit_playlist_extended_options(
+	void)
+{
+	return player_ui_get_edit_playlist_profile() ? player_ui_edit_extended.current : NULL;
+}
+
 boolean player_ui_edit_profile_is_dirty(
 	void)
 {
@@ -435,7 +451,9 @@ boolean player_ui_edit_profile_is_dirty(
 					sizeof(struct game_variant)) ||
 					/* port: and its PC options */
 					csmemcmp(&player_ui_edit_options.original, &player_ui_edit_options.current,
-						sizeof(struct game_variant_options)))
+						sizeof(struct game_variant_options)) ||
+					csmemcmp(player_ui_edit_extended.original, player_ui_edit_extended.current,
+						sizeof(player_ui_edit_extended.current)))
 				{
 					result = TRUE;
 				}
@@ -638,6 +656,7 @@ void player_ui_set_game_variant(
 	player_ui_globals.multiplayer_variant_specified = TRUE;
 	/* port: its PC options, the defaults until they are given */
 	game_variant_options_default(variant, &player_ui_multiplayer_options);
+	game_modes_options_default_bytes(player_ui_multiplayer_extended);
 	return;
 }
 
@@ -646,6 +665,19 @@ void player_ui_set_game_variant_options(
 	struct game_variant_options const *options)
 {
 	player_ui_multiplayer_options = *options;
+}
+
+/* port: its OpenCE options, 16 bytes (the defaults until they are given) */
+void player_ui_set_game_variant_extended_options(
+	unsigned char const *extended)
+{
+	csmemcpy(player_ui_multiplayer_extended, extended, sizeof(player_ui_multiplayer_extended));
+}
+
+unsigned char const *player_ui_get_game_variant_extended_options(
+	void)
+{
+	return player_ui_multiplayer_extended;
 }
 
 struct game_variant_options const *player_ui_get_game_variant_options(
@@ -815,6 +847,8 @@ void player_ui_begin_editing_profile(
 				/* port: and its PC options */
 				playlist_profile_get_options(profile_index, &player_ui_edit_options.original);
 				player_ui_edit_options.current = player_ui_edit_options.original;
+				playlist_profile_get_extended_options(profile_index, player_ui_edit_extended.original);
+				csmemcpy(player_ui_edit_extended.current, player_ui_edit_extended.original, sizeof(player_ui_edit_extended.current));
 			}
 			else
 			{
@@ -902,10 +936,11 @@ boolean player_ui_save_profile(
 						player_ui_globals.edit_profile.current.variant.human_readable_game_description);
 					if (new_profile_index != NONE)
 					{
-						playlist_profile_save_with_options(
+						playlist_profile_save_with_extended_options(
 							new_profile_index,
 							&player_ui_globals.edit_profile.current.variant,
-							&player_ui_edit_options.current);
+							&player_ui_edit_options.current,
+							player_ui_edit_extended.current);
 						player_ui_globals.edit_profile_index = new_profile_index;
 						if (saved_game_file_get_path_to_enclosing_directory(
 							new_profile_index,
@@ -930,10 +965,11 @@ boolean player_ui_save_profile(
 			}
 			else
 			{
-				playlist_profile_save_with_options(
+				playlist_profile_save_with_extended_options(
 					player_ui_globals.edit_profile_index,
 					&player_ui_globals.edit_profile.current.variant,
-					&player_ui_edit_options.current);
+					&player_ui_edit_options.current,
+					player_ui_edit_extended.current);
 				if (saved_game_file_get_path_to_enclosing_directory(
 					player_ui_globals.edit_profile_index,
 					directory_path))

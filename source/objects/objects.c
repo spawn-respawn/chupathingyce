@@ -5,6 +5,7 @@ OBJECTS.C
 /* ---------- headers */
 
 #include "cseries.h"
+#include "extensions/extension_api.h" /* port: a ruleset's objective weapons */
 #include "objects.h"
 
 #include "damage.h"
@@ -1813,7 +1814,9 @@ static void object_delete_initial_recursive(
 	if (game_engine_running() && object->object.type == _object_type_weapon &&
 		!network_game_distributed_client() && !CACHE_FILE_TAGS_ARE_CE())
 	{
-		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 829, !(weapon_is_flag(object_index)));
+		/* port: (but an Infection zombie's skull: extensions) */
+		match_assert("c:\\halo\\SOURCE\\objects\\objects.c", 829,
+			!weapon_is_flag(object_index) || halo_extensions_can_delete_objective_weapon(object_index));
 	}
 	
 	if (object->object.first_child_object_index!=NONE)

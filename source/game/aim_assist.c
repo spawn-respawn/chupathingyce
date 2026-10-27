@@ -44,6 +44,7 @@ symbols in this file:
 
 #include "cseries.h"
 #include "game/aim_assist.h"
+#include "extensions/extension_api.h" /* port: Hardcore has no aim assist */
 
 #include "camera/director.h"
 #include "camera/observer.h"
@@ -505,6 +506,9 @@ boolean aim_assist(
 	short ignore_team_index,
 	struct aim_assist_target *target)
 {
+	/* port: Hardcore has no aim assist: no autoaim, no magnetism */
+	if (halo_extensions_suppress_aim_assist())
+		return FALSE;
 	if (scenario_leaf_index_from_point(position)!=NONE)
 	{
 		short cluster_index= TAG_BLOCK_GET_ELEMENT(

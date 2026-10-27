@@ -120,6 +120,7 @@ struct game_options;
 
 #include "cseries/cseries.h"
 #include "game/game.h"
+#include "game_modes.h" /* port: port/linux/game/game_modes.c */
 #include "ai/ai.h"
 #include "bink/bink_playback.h"
 #include "bungie_net/network/transport.h"
@@ -247,6 +248,8 @@ extern struct game_variant game_variant_global;
 extern struct data_array *player_data;
 /* port: the PC options the game plays by (game_set_game_variant_options) */
 static struct game_variant_options game_variant_options_global;
+/* port: OpenCE's gametype options (game_set_game_variant_extended_options) */
+static struct game_variant_extended_options game_variant_extended_options_global;
 
 char const *global_game_difficulty_level_names[NUMBER_OF_GAME_DIFFICULTY_LEVELS] =
 {
@@ -478,8 +481,28 @@ void game_set_game_variant(
 	}
 	/* port: its PC options, until the network game's are given */
 	game_variant_options_default(&game_variant_global, &game_variant_options_global);
+	game_modes_options_default(&game_variant_extended_options_global);
 
 	return;
+}
+
+void game_set_game_variant_extended_options(
+	struct game_variant_extended_options const *options)
+{
+	if (options)
+	{
+		game_variant_extended_options_global = *options;
+		/* (another machine's: in range) */
+		game_modes_options_sanitize(&game_variant_extended_options_global);
+	}
+	else
+		game_modes_options_default(&game_variant_extended_options_global);
+}
+
+struct game_variant_extended_options const *game_variant_extended_options_get(
+	void)
+{
+	return &game_variant_extended_options_global;
 }
 
 void game_set_game_variant_options(

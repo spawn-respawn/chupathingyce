@@ -155,6 +155,12 @@ defaults once it is set, then the network game's */
 struct game_variant_options;
 void game_set_game_variant_options(struct game_variant_options const *options);
 struct game_variant_options const *game_variant_options_get(void);
+/* port: OpenCE's gametype options beside them (game_engine.h's struct
+game_variant_extended_options): none once the variant is set, then the
+network game's (game_modes.c) */
+struct game_variant_extended_options;
+void game_set_game_variant_extended_options(struct game_variant_extended_options const *options);
+struct game_variant_extended_options const *game_variant_extended_options_get(void);
 void game_set_game_engine_index(short index);
 boolean game_all_quiet(
 	void);

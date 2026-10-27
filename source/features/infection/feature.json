@@ -1,0 +1,8 @@
+{
+  "name": "infection",
+  "order": 31,
+  "default": true,
+  "help": "OpenCE-compatible Infection (team Slayer: zombies and humans)",
+  "extension": true,
+  "settings": "settings.inc"
+}

@@ -103,12 +103,16 @@ symbols in this file:
 
 #include "cseries.h"
 #include "damage.h"
+#include "extensions/extension_api.h" /* port: SWAT's headshots */
+#include "game_modes.h" /* port: the melee classification */
 #include "ai/ai.h"
 #include "cseries/errors.h"
 #include "effects/effects.h"
 #include "effects/player_effects.h"
 #include "game/cheats.h"
 #include "game/game.h"
+#include "extensions/extension_api.h" /* port: SWAT's headshots */
+#include "game_modes.h" /* port: the melee classification */
 #include "game/game_allegiance.h"
 #include "game/game_engine.h"
 #include "game/game_globals.h"
@@ -1131,11 +1135,14 @@ static void object_damage_aftermath(
 
 			game_stats_kill_damage(damage->definition_index);
 #endif
+			/* port: whether it is a melee's (Gun Game's demotion: game_modes.c) */
+			game_modes_kill_by_melee(damage_effect->damage.category == _damage_category_melee);
 			game_statistics_record_kill(
 				object_index,
 				damage->owner_player_index,
 				damage->owner_object_index,
 				damage->owner_team_index);
+			game_modes_kill_by_melee(FALSE);
 #ifdef HALO_GAME_BROWSER
 			game_stats_kill_damage(NONE);
 #endif
@@ -1247,7 +1254,14 @@ static void object_damage_body(
 	{
 		if (damage_amount > 0.f && TEST_FLAG(damage_material->flags, _damage_material_head_bit))
 		{
-			if (TEST_FLAG(damage_definition->flags, _damage_can_cause_headshots_bit))
+			/* port: SWAT's headshots, a shot of any weapon's (game_modes.c) */
+			if (TEST_FLAG(damage_definition->flags, _damage_can_cause_headshots_bit) ||
+				halo_extensions_headshot_kills(object_index,
+					damage_definition->category == _damage_category_bullet ||
+					damage_definition->category == _damage_category_sniper ||
+					damage_definition->category == _damage_category_plasma ||
+					damage_definition->category == _damage_category_needle ||
+					damage_definition->category == _damage_category_shotgun))
 			{
 				if (game_engine_running() ||
 					object->object.type != _object_type_biped ||

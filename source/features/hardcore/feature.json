@@ -1,0 +1,8 @@
+{
+  "name": "hardcore",
+  "order": 33,
+  "default": true,
+  "help": "OpenCE-compatible Hardcore (no motion sensor or aim assist, kills restore health)",
+  "extension": true,
+  "settings": "settings.inc"
+}

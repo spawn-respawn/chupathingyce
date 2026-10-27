@@ -55,15 +55,17 @@ def test_selection(tmp_path, monkeypatch):
 
 
 def test_bot_feature_selection():
-    selected = features.defines(SimpleNamespace(feature_bots=True))
+    # (OpenCE's modes are on by default: this checks Bots' own defines)
+    others = dict(feature_gun_game=False, feature_infection=False, feature_swat=False, feature_hardcore=False)
+    selected = features.defines(SimpleNamespace(feature_bots=True, **others))
     assert selected == [
         "-DHALO_FEATURE_BOTS", "-DHALO_EXTENSION_1=bots",
         "-DHALO_FEATURE_SETTINGS_1=bots",
     ]
-    assert features.defines(SimpleNamespace(feature_bots=False)) == []
+    assert features.defines(SimpleNamespace(feature_bots=False, **others)) == []
     config = {"game": {"root": "source"}}
-    enabled = linux_build.game_sources(config, SimpleNamespace(feature_bots=True))
-    disabled = linux_build.game_sources(config, SimpleNamespace(feature_bots=False))
+    enabled = linux_build.game_sources(config, SimpleNamespace(feature_bots=True, **others))
+    disabled = linux_build.game_sources(config, SimpleNamespace(feature_bots=False, **others))
     assert Path("source/features/bots/bots.c") in enabled
     assert not any("source/features/bots/" in str(path) for path in disabled)
 

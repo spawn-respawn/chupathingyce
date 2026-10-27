@@ -66,6 +66,11 @@ code with the feature's compile-time define.
 - A ruleset claims a session only during engine selection. Its provided hooks
   replace the corresponding stock operation; absent hooks fall through. A
   local-only ruleset has no network-state representation.
+- `postspawn_player` is additive, unlike the other ruleset hooks: it runs
+  after the engine's own starting equipment, on the host, so a mode can
+  replace the starting inventory on the spawn tick. A mode that must keep the
+  engine's scoring, statistics, respawn and network behaviour (Gun Game) must
+  not use `player_killed`, which replaces them.
 - Player controllers update before player actions. They do not change host
   authority or create a network protocol.
 - Editors arbitrate ownership in registry order. The active editor owns input,
@@ -82,3 +87,30 @@ python3 configure.py
 ninja macos
 uv run --no-project --with pytest python -m pytest -q tools/test_features.py
 ```
+
+## Upstream compatibility contracts
+
+A feature that has to play the same game as another client (OpenCE's Gun
+Game, Infection, SWAT, Hardcore) carries a `compatibility.json` beside its
+`feature.json`: the upstream files it is built from and the files its
+behaviour depends on, each pinned to a Git blob; the gameplay and wire
+contract; and the tests required before it may claim compatibility.
+`tools/compat_manifest.py` (`check`, `report`, `accept`, `digest`) tracks
+drift: an acknowledged-but-unreconciled change never counts as verified.
+Golden wire vectors are in `tools/tests/compat/` and run by
+`tools/test_compat_wire.py`. The manifest says what was integrated; Delta's
+signed compatibility map says what has been proven to interoperate.
+
+## OpenCE game modes
+
+Gun Game, Infection, SWAT and Hardcore are extensions (`source/features/<mode>`,
+on by default). A mode that owns the session is a ruleset: its selector
+claims the game from the OpenCE options (`game_variant_extended_options`, the
+16 option bytes of network version 35) and the engine asks it through the
+ruleset queries (`unit_restricted`, `allow_weapon_drop`, `melee_multiplier`,
+`time_remaining`, `respawn_ticks`, `headshot_kills`, `write/read_network_state`,
+...). Hardcore is a flag over any mode, so it uses general hooks
+(`hide_motion_sensor`, `suppress_aim_assist`, `player_killed_player`).
+`opence_modes` declares what a build plays; a client leaves a game of a mode
+it does not. `host_game_options` lets each extension add to the hosted game's
+options (every extension is asked), chosen by `<mode>.host` settings.

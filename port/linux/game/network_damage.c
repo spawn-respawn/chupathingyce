@@ -41,6 +41,7 @@ being hit looks and feels like on the clients).
 */
 
 #include "cseries.h"
+#include "extensions/extension_api.h" /* port: a ruleset's unit rules */
 #include "cseries/errors.h"
 #include "game/game.h"
 #include "game/game_globals.h"
@@ -1952,6 +1953,14 @@ static boolean distributed_report_valid(
 	{
 		return FALSE;
 	}
+	/* an Infection zombie's blow at a rider (not the vehicle, as the game's
+	melee has it) only past the host's own line to them (a ruleset's: Infection's) */
+	if (melee && halo_extensions_unit_restricted(distributed_living_unit(player)) && target->object.type == _object_type_biped &&
+		target->object.parent_object_index != NONE &&
+		!halo_extensions_melee_rider_visible(distributed_living_unit(player), report->object_index, &report->damage.direction))
+	{
+		return FALSE;
+	}
 	if (collision && !distributed_player_drove_into(player_index, &report->damage.epicenter, &report->target_position,
 		target->object.bounding_sphere_radius, ticks))
 	{
@@ -2023,7 +2032,8 @@ static boolean distributed_report_valid(
 	{
 		normalize3d(&damage->direction);
 	}
-	damage->multiplier = 1.0f;
+	/* (an Infection zombie's skull's blow: its multiplier the host's own) */
+	damage->multiplier = melee ? halo_extensions_melee_multiplier(distributed_living_unit(player)) : 1.0f;
 	damage->owner_player_index = DATUM_INDEX_NEW(player_index, player->identifier);
 	damage->owner_team_index = (short)player->team_index;
 	/* (the players' traits' multipliers go by the object) */

@@ -43,6 +43,15 @@ struct game_variant_options;
 boolean playlist_profile_get_options(
 	long playlist_profile_index,
 	struct game_variant_options *options);
+/* port: its OpenCE options (16 bytes), the file's or the defaults */
+boolean playlist_profile_get_extended_options(
+	long playlist_profile_index,
+	byte *extended);
+void playlist_profile_save_with_extended_options(
+	long playlist_profile_index,
+	struct game_variant *variant,
+	struct game_variant_options const *options,
+	byte const *extended);
 void playlist_profile_save_with_options(
 	long playlist_profile_index,
 	struct game_variant *variant,
@@ -58,6 +67,8 @@ boolean playlist_profile_get_display_name(
 /* port: a default gametype's name: the map's string list's (string_list_index:
 ui\default_multiplayer_game_setting_names), else the port's own built-ins'
 (Bomb, Grifball); NULL for none */
+wchar_t const *playlist_profile_default_description(
+	short profile_index);
 wchar_t const *playlist_profile_default_name(
 	short profile_index,
 	long string_list_index);

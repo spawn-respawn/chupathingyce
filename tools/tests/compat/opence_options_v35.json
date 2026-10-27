@@ -1,0 +1,122 @@
+{
+  "comment": "Golden vectors for OpenCE's extended game options (network version 35): the 16 bytes at 0x1C..0x2B of game_variant_options. Byte order: mode, hardcore, first_zombies, zombie_speed, skull_damage, zombie_respawn, countdown, zombie_shields, gun_game_order (0x24), gun_game_melee_demotes (0x25), 6 reserved. Derived from OpenCE port/linux/game/game_modes.c (game_modes_gametype, game_modes_options_default/sanitize) at the blob pinned in source/features/*/compatibility.json.",
+  "vectors": [
+    {
+      "name": "gun_game_strongest_demote",
+      "bytes": "03 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": false,
+      "mode": 3,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "gun_game_weakest_no_demote",
+      "bytes": "03 00 01 96 c8 05 0a 01 01 00 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": false,
+      "mode": 3,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "gun_game_random",
+      "bytes": "03 00 01 96 c8 05 0a 01 02 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": false,
+      "mode": 3,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "gun_game_bad_order_falls_back",
+      "bytes": "03 00 01 96 c8 05 0a 01 07 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": false,
+      "mode": 3,
+      "hardcore": 0,
+      "sanitized": "03 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00"
+    },
+    {
+      "name": "gun_game_on_teams_is_none",
+      "bytes": "03 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": true,
+      "mode": 0,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "gun_game_off_slayer_is_none",
+      "bytes": "03 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": false,
+      "teams": false,
+      "mode": 0,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "infection_defaults",
+      "bytes": "02 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": true,
+      "mode": 2,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "infection_free_for_all_is_none",
+      "bytes": "02 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": false,
+      "mode": 0,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "swat_slayer_teams",
+      "bytes": "01 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": true,
+      "mode": 1,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "swat_slayer_ffa",
+      "bytes": "01 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": true,
+      "teams": false,
+      "mode": 1,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "swat_off_slayer_is_none",
+      "bytes": "01 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": false,
+      "teams": true,
+      "mode": 0,
+      "hardcore": 0,
+      "sanitized": "same"
+    },
+    {
+      "name": "hardcore_ctf",
+      "bytes": "00 01 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00",
+      "slayer": false,
+      "teams": true,
+      "mode": 0,
+      "hardcore": 1,
+      "sanitized": "same"
+    },
+    {
+      "name": "unknown_mode_is_none_reserved_cleared",
+      "bytes": "09 00 01 96 c8 05 0a 01 00 01 aa bb 00 00 00 ff",
+      "slayer": true,
+      "teams": false,
+      "mode": 0,
+      "hardcore": 0,
+      "sanitized": "00 00 01 96 c8 05 0a 01 00 01 00 00 00 00 00 00"
+    }
+  ]
+}

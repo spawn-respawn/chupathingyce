@@ -933,6 +933,7 @@ symbols in this file:
 /* port: (saved games/playlist_profile.h's, whose other prototypes this unit
 declares its own way; the 64-bit build takes no implicit declarations) */
 boolean playlist_profile_get_options(long playlist_profile_index, struct game_variant_options *options);
+boolean playlist_profile_get_extended_options(long playlist_profile_index, unsigned char *extended);
 #endif
 #include "text/unicode.h"
 #include "halo_menus.h" /* port: PC_MENU_FUNCTION_BASE */
@@ -5944,8 +5945,12 @@ static boolean multiplayer_profile_set_for_game(
 		{
 			struct game_variant_options options;
 
+			unsigned char extended[16];
+
 			if (playlist_profile_get_options(profile_index, &options))
 				player_ui_set_game_variant_options(&options);
+			playlist_profile_get_extended_options(profile_index, extended);
+			player_ui_set_game_variant_extended_options(extended);
 		}
 		if (server)
 			network_game_server_change_game_variant(server, &profile);
@@ -6231,8 +6236,13 @@ boolean ui_widget_port_gametype_choose(
 	{
 		struct game_variant_options options;
 
+		unsigned char extended[16];
+
 		playlist_profile_get_options(profile_index, &options);
 		player_ui_set_game_variant_options(&options);
+		/* (and OpenCE's: the gametype's mode, Hardcore) */
+		playlist_profile_get_extended_options(profile_index, extended);
+		player_ui_set_game_variant_extended_options(extended);
 	}
 	if (server)
 		network_game_server_change_game_variant(server, &profile);

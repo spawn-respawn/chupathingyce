@@ -88,6 +88,8 @@ their handlers open opens.
 #include "text/unicode.h"
 
 #include "halo_menus.h"
+#include "game_modes.h"
+#include "network_rules.h"
 /* (internet play's server browser: the platform layer's) */
 #include "../src/p2p.h"
 #include "../src/controller_layout.h"
@@ -3082,6 +3084,7 @@ boolean ui_widget_port_multiplayer_map_choose(short level_index);
 boolean ui_widget_port_cooperative_level_choose(char const *map_name, short difficulty);
 short ui_widget_port_gametypes(long *indices, short maximum, short *last_used);
 boolean ui_widget_port_gametype_choose(long profile_index);
+boolean playlist_profile_get_extended_options(long playlist_profile_index, unsigned char *extended);
 boolean ui_widget_port_host(struct widget_instance *widget, struct event_record *event, boolean *widget_deleted);
 boolean ui_widget_port_browse(struct widget_instance *widget, struct event_record *event, boolean *widget_deleted);
 boolean ui_widget_port_open(struct widget_instance *widget, char const *name, boolean *widget_deleted);
@@ -3155,6 +3158,9 @@ static struct
 	short gametype_count;
 	/* (those of the bank the list's spinner shows: STANDARD, CUSTOM) */
 	short bank[MAXIMUM_GAMETYPES], bank_count, bank_shown;
+	/* (each gametype's bank and OpenCE options, read once with the list: the
+	rows are drawn every frame, a file read each would not do) */
+	unsigned char gametype_bank[MAXIMUM_GAMETYPES], gametype_extended[MAXIMUM_GAMETYPES][16];
 	short gametype_first, gametype_chosen;
 	/* the server settings */
 	wchar_t game_name[16];
@@ -3503,7 +3509,27 @@ static boolean gametype_setup_apply(void);
 static void gametype_setup_type(wchar_t *text);
 
 /* ---- the gametype list: its spinner's bank (STANDARD: the built-in ones,
-CUSTOM: those saved) in its first row, then the bank's gametypes */
+OPENCE: OpenCE's built-in ones, CUSTOM: those saved) in its first row, then
+the bank's gametypes */
+
+/* a gametype's kind for its rules text ("INFECTION", "HARDCORE CTF"), else its game engine's name */
+static wchar_t const *gametype_kind_or_engine(short gametype, struct game_variant const *variant)
+{
+	wchar_t const *kind = game_modes_variant_kind_name(variant, multiplayer.gametype_extended[gametype]);
+
+	return kind ? kind : engine_names[PIN(variant->game_engine_index, 0, (long)NUMBEROF(engine_names) - 1)];
+}
+
+enum { GAMETYPE_BANK_STANDARD = 0, GAMETYPE_BANK_OPENCE, GAMETYPE_BANK_CUSTOM };
+
+/* the bank a gametype is in: a built-in one whose OpenCE options say a mode
+or Hardcore is OpenCE's */
+static short gametype_bank_of(long profile_index, unsigned char const *extended)
+{
+	if (!((unsigned long)profile_index & PLAYLIST_READ_ONLY_BIT))
+		return GAMETYPE_BANK_CUSTOM;
+	return extended[0] || extended[1] ? GAMETYPE_BANK_OPENCE : GAMETYPE_BANK_STANDARD;
+}
 
 static void gametype_bank_read(short bank)
 {
@@ -3513,9 +3539,7 @@ static void gametype_bank_read(short bank)
 	multiplayer.bank_count = 0;
 	for (index = 0; index < multiplayer.gametype_count; index++)
 	{
-		boolean standard = ((unsigned long)multiplayer.gametypes[index] & PLAYLIST_READ_ONLY_BIT) != 0;
-
-		if (standard == (bank == 0))
+		if (multiplayer.gametype_bank[index] == bank)
 			multiplayer.bank[multiplayer.bank_count++] = index;
 	}
 	multiplayer.gametype_first = 0;
@@ -3529,8 +3553,13 @@ static boolean gametype_list_initialize(struct widget_instance *list)
 	short last, index;
 
 	multiplayer.gametype_count = ui_widget_port_gametypes(multiplayer.gametypes, MAXIMUM_GAMETYPES, &last);
-	gametype_bank_read(multiplayer.gametype_count && !((unsigned long)multiplayer.gametypes[last] &
-		PLAYLIST_READ_ONLY_BIT) ? 1 : 0);
+	for (index = 0; index < multiplayer.gametype_count; index++)
+	{
+		playlist_profile_get_extended_options(multiplayer.gametypes[index], multiplayer.gametype_extended[index]);
+		multiplayer.gametype_bank[index] = (unsigned char)gametype_bank_of(multiplayer.gametypes[index],
+			multiplayer.gametype_extended[index]);
+	}
+	gametype_bank_read(multiplayer.gametype_count ? multiplayer.gametype_bank[last] : GAMETYPE_BANK_STANDARD);
 	for (index = 0; index < multiplayer.bank_count; index++)
 	{
 		if (multiplayer.bank[index] == last)
@@ -3632,7 +3661,8 @@ static void gametype_list_update(struct widget_instance *list)
 			if ((widget = named(description, "gametype_right_pic", 0)) != NULL)
 				widget->animation.current_frame_index = (short)(engine == game_engine_bomb ? game_engine_oddball :
 					engine <= 5 ? engine : 0);
-			usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\nScore to win: %ld", engine_names[engine],
+			usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\nScore to win: %ld",
+				gametype_kind_or_engine(multiplayer.bank[multiplayer.gametype_chosen], &variant),
 				variant.universal_variant.teams ? L"Teams" : L"Free for all", variant.universal_variant.score_to_win);
 			text[NUMBEROF(text) - 1] = 0;
 			text_set(named(description, "gametype_right_data", 0), text);
@@ -5978,8 +6008,14 @@ static void lobby_update(struct widget_instance *list)
 
 		ustrncpy(gametype, game->variant.human_readable_game_description, NUMBEROF(gametype) - 1);
 		gametype[NUMBEROF(gametype) - 1] = 0;
+		unsigned char extended[16];
+		wchar_t const *kind;
+
+		/* (an OpenCE gametype's kind: the host's choice, or the record's) */
+		game_modes_pending_get(extended);
+		kind = game_modes_variant_kind_name(&game->variant, extended);
 		usnprintf(text, NUMBEROF(text) - 1, L"%s\r\n%s\r\n%d of %d players\r\n\r\n%s", gametype,
-			ENGINE_NAME(game->variant.game_engine_index), lobby_player_count, game->maximum_players,
+			kind ? kind : ENGINE_NAME(game->variant.game_engine_index), lobby_player_count, game->maximum_players,
 			seconds > 0 ? L"Starting in:" :
 				game->machine_count < 2 && !network_game_solo_game() ? L"Waiting for players" : L"");
 		text[NUMBEROF(text) - 1] = 0;
@@ -6175,6 +6211,7 @@ static struct
 	boolean setup;
 	struct game_variant setup_variant;
 	struct game_variant_options setup_options;
+	unsigned char setup_extended[16];
 	/* the vehicle screen's side shown */
 	short vehicle_side;
 } gametype_edit = { { 0 }, 0, 0, 0, TRUE, NONE, FALSE };
@@ -6189,6 +6226,12 @@ static struct game_variant_options *edit_options(void)
 	return gametype_edit.setup ? &gametype_edit.setup_options : player_ui_get_edit_playlist_options();
 }
 
+/* OpenCE's options (16 bytes) of the gametype being edited */
+static unsigned char *edit_extended(void)
+{
+	return gametype_edit.setup ? gametype_edit.setup_extended : player_ui_get_edit_playlist_extended_options();
+}
+
 enum
 {
 	_option_long,		/* a long of the variant */
@@ -6197,6 +6240,7 @@ enum
 	_option_health,		/* the variant's health, tenths */
 	_option_short,		/* a short of the options */
 	_option_option_byte,	/* a byte of the options */
+	_option_extended_byte,	/* a byte of OpenCE's 16 (network_rules.h's NETWORK_RULES_OPTION_*) */
 	_option_radar		/* the options' radar players, and the variant's flag */
 };
 
@@ -6212,10 +6256,29 @@ struct gametype_option
 
 #define VARIANT_FIELD(field) (short)offsetof(struct game_variant, field)
 #define OPTIONS_FIELD(field) (short)offsetof(struct game_variant_options, field)
+#define EXTENDED_FIELD(field) (short)offsetof(struct game_variant_extended_options, field)
 #define TIME_LIMITS { 0, 10, 15, 20, 25, 30, 45 }
 
 static struct gametype_option const gametype_options[] =
 {
+	/* OPENCE OPTIONS (OpenCE's gametypes: game_modes.c) */
+	{ "oce_mode_spinner", _option_extended_byte, EXTENDED_FIELD(mode), 0, 4,
+		{ _game_mode_none, _game_mode_swat, _game_mode_infection, _game_mode_gun_game } },
+	{ "oce_hardcore_spinner", _option_extended_byte, EXTENDED_FIELD(hardcore), 0, 2, { FALSE, TRUE } },
+	{ "inf_zombies_spinner", _option_extended_byte, EXTENDED_FIELD(infection_initial_zombies), 0, 6,
+		{ 1, 2, 3, 4, 8, 16 } },
+	{ "inf_speed_spinner", _option_extended_byte, EXTENDED_FIELD(infection_zombie_speed), 0, 6,
+		{ 100, 110, 125, 150, 175, 200 } },
+	{ "inf_damage_spinner", _option_extended_byte, EXTENDED_FIELD(infection_skull_damage), 0, 4,
+		{ 100, 150, 200, 250 } },
+	{ "inf_respawn_spinner", _option_extended_byte, EXTENDED_FIELD(infection_respawn_time), 0, 6,
+		{ 1, 3, 5, 10, 15, 30 } },
+	{ "inf_countdown_spinner", _option_extended_byte, EXTENDED_FIELD(infection_countdown), 0, 5,
+		{ 0, 5, 10, 15, 30 } },
+	{ "inf_shields_spinner", _option_extended_byte, EXTENDED_FIELD(infection_zombie_shields), 0, 2, { FALSE, TRUE } },
+	{ "gg_order_spinner", _option_extended_byte, EXTENDED_FIELD(gun_game_order), 0, 3,
+		{ _gun_game_order_strongest_first, _gun_game_order_weakest_first, _gun_game_order_random } },
+	{ "gg_melee_spinner", _option_extended_byte, EXTENDED_FIELD(gun_game_melee_demotes), 0, 2, { FALSE, TRUE } },
 	/* player options */
 	{ "number_of_lives_spinner", _option_long, VARIANT_FIELD(universal_variant.lives), 0, 4, { 0, 1, 3, 5 } },
 	{ "maximum_health_spinner", _option_health, 0, 0, 6, { 5, 10, 15, 20, 30, 40 } },
@@ -6334,6 +6397,7 @@ static long gametype_option_value(struct gametype_option const *option, struct g
 	case _option_health: return (long)(variant->universal_variant.health * 10.0f + 0.5f);
 	case _option_short: return *(short *)(o + option->offset);
 	case _option_option_byte: return o[option->offset];
+	case _option_extended_byte: return edit_extended() ? edit_extended()[option->offset] : 0;
 	case _option_radar: return options->radar_players;
 	}
 	return 0;
@@ -6358,6 +6422,10 @@ static void gametype_option_value_set(struct gametype_option const *option, long
 	case _option_health: variant->universal_variant.health = (real)value / 10.0f; break;
 	case _option_short: *(short *)(o + option->offset) = (short)value; break;
 	case _option_option_byte: o[option->offset] = (byte)value; break;
+	case _option_extended_byte:
+		if (edit_extended())
+			edit_extended()[option->offset] = (byte)value;
+		break;
 	case _option_radar:
 		/* (and the Xbox's flag: other players on the tracker or not) */
 		options->radar_players = (byte)value;
@@ -6564,6 +6632,15 @@ static boolean gametype_options_save(struct widget_instance *widget)
 	if (named(list, "op_team", 0))
 		vehicles_keep(list);
 	gametype_options_each(list, TRUE);
+	/* (OPENCE OPTIONS: Infection is played on teams, Gun Game free for all:
+	game_modes_variant_mode) */
+	if (named(list, "oce_mode_spinner", 0) && edit_extended() && edit_variant()->game_engine_index == game_engine_slayer)
+	{
+		if (edit_extended()[NETWORK_RULES_OPTION_MODE] == _game_mode_infection)
+			edit_variant()->universal_variant.teams = TRUE;
+		else if (edit_extended()[NETWORK_RULES_OPTION_MODE] == _game_mode_gun_game)
+			edit_variant()->universal_variant.teams = FALSE;
+	}
 	return TRUE;
 }
 
@@ -6577,6 +6654,8 @@ static void gametype_setup_begin(void)
 	if (!player_ui_game_variant_specified(&gametype_edit.setup_variant))
 		return;
 	gametype_edit.setup_options = *player_ui_get_game_variant_options();
+	csmemcpy(gametype_edit.setup_extended, player_ui_get_game_variant_extended_options(),
+		sizeof(gametype_edit.setup_extended));
 	gametype_edit.setup = TRUE;
 	gametype_edit.vehicle_side = 0;
 }
@@ -6591,6 +6670,9 @@ static boolean gametype_setup_apply(void)
 	boolean applied = !gametype_edit.setup ||
 		ui_widget_port_game_variant_set(&gametype_edit.setup_variant, &gametype_edit.setup_options);
 
+	/* (its OpenCE options too, after the variant's set, which gives defaults) */
+	if (applied && gametype_edit.setup)
+		player_ui_set_game_variant_extended_options(gametype_edit.setup_extended);
 	gametype_edit.setup = FALSE;
 	return applied;
 }
@@ -6691,6 +6773,27 @@ static void gametype_edit_list_update(struct widget_instance *list)
 	profile_name_show(description);
 }
 
+/* "port playlist edit desc" (after the PC version's "playlist settings menu
+update desc"): the gametype editor's OPENCE OPTIONS, its eighth row, has its
+own words (the list's ninth) over GAME OPTIONS' picture, and the buttons
+after it SAVE CHANGES' */
+#define PLAYLIST_EDIT_OPENCE_ROW 7
+#define PLAYLIST_EDIT_OPENCE_WORDS 8
+#define PLAYLIST_EDIT_GAME_OPTIONS_PICTURE 1
+
+static void playlist_edit_description(struct widget_instance *list)
+{
+	struct widget_instance *description = list->parameters.list.extended_description;
+	short index = list->focused_child ? ui_widget_port_list_index(list) : NONE;
+
+	if (!description || !description->child || !description->child->next || index < PLAYLIST_EDIT_OPENCE_ROW)
+		return;
+	description->child->parameters.text_box.string_list_index =
+		index == PLAYLIST_EDIT_OPENCE_ROW ? PLAYLIST_EDIT_OPENCE_WORDS : (short)(index - 1);
+	description->child->next->animation.current_frame_index =
+		index == PLAYLIST_EDIT_OPENCE_ROW ? PLAYLIST_EDIT_GAME_OPTIONS_PICTURE : (short)(index - 1);
+}
+
 /* "mp profile begin editing" (the list's custom activation: OK, a row's A) */
 static boolean gametype_edit_begin(void)
 {
@@ -6756,6 +6859,27 @@ static void gametype_option_help(struct widget_instance *list)
 		visible_set(named(list, "op_weapon_set", 0), !custom);
 		visible_set(named(list, "op_primary_weapon", 0), custom);
 		visible_set(named(list, "op_secondary_weapon", 0), custom);
+	}
+	/* (OPENCE OPTIONS: the mode's own rows, Infection's or Gun Game's, below
+	MODE and HARDCORE) */
+	if (named(list, "oce_mode_spinner", 0))
+	{
+		short mode = named(list, "oce_mode_spinner", 0)->parameters.list.selected_index;
+		short place = 73 + 2 * 30;
+
+		for (row = list->child; row; row = row->next)
+		{
+			boolean infection = !strncmp(row->name, "op_inf_", 7);
+
+			if (!infection && strncmp(row->name, "op_gg_", 6))
+				continue;
+			row->visible = infection ? mode == _game_mode_infection : mode == _game_mode_gun_game;
+			if (row->visible)
+			{
+				row->vertical_offset = place;
+				place += 30;
+			}
+		}
 	}
 	/* (the server browser's filters, hidden: their helps are fewer than
 	their values) */
@@ -9030,4 +9154,6 @@ void pc_menu_game_data_function_invoke(
 		chupathingy_settings_picture(widget);
 	else if (!strcmp(name, "port host update"))
 		host_update(widget);
+	else if (!strcmp(name, "port playlist edit desc"))
+		playlist_edit_description(widget);
 }
