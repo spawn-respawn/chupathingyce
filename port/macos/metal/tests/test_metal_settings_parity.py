@@ -39,14 +39,59 @@ ENTRY = re.compile(r'^\t\{ "(?P<name>[a-z0-9_]+\.[a-z0-9_]+)",\s*(?P<type>_confi
 ANY_ENTRY = re.compile(r'^\t\{ "[a-z0-9_]+\.[a-z0-9_]+", _config_\w+', re.M)
 DEFAULT_MACRO = re.compile(r"^#define (DEFAULT_\w+) (.+)$", re.M)
 QUOTED_NAME = re.compile(r'"([a-z0-9_]+\.[a-z0-9_]+)"')
+# a console's macros (halo_console_features.h, the consoles' compile lines): never defined on the desktop
+CONSOLE_MACRO = re.compile(r"^HALO_(?:CONSOLE_\w+|\w+_CONSOLE)$")
+CONDITIONAL = re.compile(r"^#\s*(?P<directive>ifdef|ifndef|if|else|elif|endif)\b\s*(?P<macro>\w*)")
+
+
+def desktop_lines(text: str) -> str:
+    """the text with each #ifdef/#ifndef on a console macro that has an #else down to the desktop's
+    branch: an entry with a console default and a desktop one is one setting, not two. A console
+    block without an #else, and every other conditional, keeps all its lines (the registries are
+    compared whole, whichever platform an entry is for)"""
+    lines = text.splitlines(keepends=True)
+    # the conditionals that have an #else or #elif, by the line that opens them
+    alternatives: set[int] = set()
+    opened: list[int] = []
+    for number, line in enumerate(lines):
+        conditional = CONDITIONAL.match(line)
+        if not conditional:
+            continue
+        if conditional["directive"] in ("ifdef", "ifndef", "if"):
+            opened.append(number)
+        elif conditional["directive"] in ("else", "elif") and opened:
+            alternatives.add(opened[-1])
+        elif conditional["directive"] == "endif" and opened:
+            opened.pop()
+    kept = []
+    # each open conditional: whether it is decided for the desktop, and whether its current branch is kept
+    stack: list[tuple[bool, bool]] = []
+    for number, line in enumerate(lines):
+        conditional = CONDITIONAL.match(line)
+        if conditional:
+            directive, macro = conditional["directive"], conditional["macro"]
+            if directive in ("ifdef", "ifndef", "if"):
+                console = (directive != "if" and number in alternatives
+                           and bool(CONSOLE_MACRO.match(macro)))
+                stack.append((console, directive == "ifndef" if console else True))
+            elif directive in ("else", "elif") and stack:
+                console, active = stack[-1]
+                stack[-1] = (console, not active if console else True)
+            elif directive == "endif" and stack:
+                stack.pop()
+            kept.append(line)
+            continue
+        if all(active for _, active in stack):
+            kept.append(line)
+    return "".join(kept)
 
 
 def registry(text: str) -> tuple[dict[str, tuple[str, str, str]], list[str]]:
-    """the settings a port_config.c registers (name -> type, default, environment variable), and
-    the names it registers more than once"""
+    """the settings a port_config.c registers on the desktop (name -> type, default, environment
+    variable), and the names it registers more than once"""
     found: dict[str, tuple[str, str, str]] = {}
     twice = []
-    for entry in ENTRY.finditer(text):
+    for entry in ENTRY.finditer(desktop_lines(text)):
         if entry["name"] in found:
             twice.append(entry["name"])
         environment = entry["env"].strip('"')
@@ -123,7 +168,7 @@ class SettingsParityTests(unittest.TestCase):
             text = path.read_text()
             self.assertGreater(len(ANY_ENTRY.findall(text)), 100)
             found, duplicates = registry(text)
-            self.assertEqual(len(found) + len(duplicates), len(ANY_ENTRY.findall(text)), path.name)
+            self.assertEqual(len(found) + len(duplicates), len(ANY_ENTRY.findall(desktop_lines(text))), path.name)
 
     def test_macos_64_bit_accepts_the_new_desktop_defaults(self):
         # HALO_64BIT, without HALO_SERVER or HALO_ANDROID, is how tools/lp64_build.py
@@ -148,6 +193,25 @@ class SettingsParityTests(unittest.TestCase):
         found = problems(self.ENTRY_A + self.ENTRY_B + self.MACRO_B, self.ENTRY_B + self.MACRO_B, set())
         self.assertEqual(len(found), 1)
         self.assertIn("display.a is registered upstream but not by the Metal", found[0])
+
+    CONSOLE_A = ('#ifdef HALO_CONSOLE_A_FEATURE\n' + ENTRY_A.split('\n')[0] + '\n#else\n'
+                 + ENTRY_A.split('\n')[0].replace('"true"', '"false"') + '\n#endif\n\t\t"A." },\n')
+
+    def test_a_console_alternative_is_one_setting_with_the_desktop_default(self):
+        values, duplicates = registry(self.CONSOLE_A)
+        self.assertEqual(duplicates, [])
+        self.assertEqual(values["display.a"][1], '"false"')
+        values, _ = registry(self.CONSOLE_A.replace("#ifdef", "#ifndef"))
+        self.assertEqual(values["display.a"][1], '"true"')
+        self.assertEqual(problems(self.CONSOLE_A, self.CONSOLE_A, set()), [])
+
+    def test_a_console_block_without_an_else_keeps_its_entries(self):
+        values, duplicates = registry("#ifdef HALO_SWITCH_CONSOLE\n" + self.ENTRY_A + "#endif\n")
+        self.assertEqual((list(values), duplicates), (["display.a"], []))
+
+    def test_a_non_console_conditional_keeps_every_entry(self):
+        text = "#ifdef HALO_GAME_BROWSER\n" + self.ENTRY_A + "#else\n" + self.ENTRY_A + "#endif\n"
+        self.assertEqual(registry(text)[1], ["display.a"])
 
     def test_a_duplicate_is_found(self):
         found = problems(self.ENTRY_A, self.ENTRY_A + self.ENTRY_A, set())

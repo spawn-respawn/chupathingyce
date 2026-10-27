@@ -937,6 +937,53 @@ static const struct config_setting config_settings[] =
 		"Make the GPU fault on purpose at the 1200th frame, to see gpu_trace's record.\n"
 		"Takes effect the next start." },
 
+#ifdef HALO_SWITCH_CONSOLE
+	{ "display.particle_limit", _config_integer, "2048", "HALO_PARTICLE_LIMIT", _environment_value, _platform_all,
+#else
+	{ "display.particle_limit", _config_integer, "4096", "HALO_PARTICLE_LIMIT", _environment_value, _platform_all,
+#endif
+		"The most particles (sparks, smoke, casings, debris) alive at once; past\n"
+		"it the oldest goes to make room for each new one. The Xbox's limit was\n"
+		"1024. 0 for the port's own 8192 (a 64-player firefight fills them, and\n"
+		"every one costs the processor and the GPU: 2048 on the Switch, 4096\n"
+		"elsewhere). Changes at once." },
+
+#ifdef HALO_CONSOLE_PARTICLE_TICKS
+	{ "display.particle_ticks", _config_boolean, "true", "HALO_PARTICLE_TICKS", _environment_value, _platform_all,
+#else
+	{ "display.particle_ticks", _config_boolean, "false", "HALO_PARTICLE_TICKS", _environment_value, _platform_all,
+#endif
+		"Move the particles that are not attached to an object (sparks, casings,\n"
+		"debris) once a 30 Hz tick, as on the Xbox, and draw them between their\n"
+		"ticks: two in three of their collision tests spared at 60 frames a\n"
+		"second, more at 120. false moves them at every frame drawn, smooth at\n"
+		"high refresh rates: the desktop's default; the consoles' is true.\n"
+		"Takes effect at the next map." },
+
+#ifdef HALO_CONSOLE_LIGHT_LIMITS
+	{ "display.dynamic_light_limit", _config_integer, "8", "HALO_DYNAMIC_LIGHT_LIMIT", _environment_value, _platform_all,
+#else
+	{ "display.dynamic_light_limit", _config_integer, "0", "HALO_DYNAMIC_LIGHT_LIMIT", _environment_value, _platform_all,
+#endif
+		"The most dynamic lights (muzzle flashes, plasma, explosions) that light\n"
+		"the level at once: the biggest on the screen keep their light on the\n"
+		"walls and floor, the rest light only the objects near them. 0 for no\n"
+		"limit, as on the Xbox (each redraws the level it reaches twice: a\n"
+		"firefight of many is the most of a busy frame's GPU time): the\n"
+		"desktop's default; the consoles' is 8. Changes at once." },
+
+#ifdef HALO_CONSOLE_LIGHT_LIMITS
+	{ "display.specular_light_limit", _config_integer, "2", "HALO_SPECULAR_LIGHT_LIMIT", _environment_value, _platform_all,
+#else
+	{ "display.specular_light_limit", _config_integer, "0", "HALO_SPECULAR_LIGHT_LIMIT", _environment_value, _platform_all,
+#endif
+		"Of those, the most that add their specular highlights (the shine on\n"
+		"metal and wet floors): the biggest on the screen, the first-person\n"
+		"weapon's first. The others still light the level, without the shine.\n"
+		"0 for no limit, as on the Xbox (a near light's highlights cover most\n"
+		"of the screen: the costliest pass of a firefight): the desktop's\n"
+		"default; the consoles' is 2. Changes at once." },
+
 	{ "debug.gpu_glsl_folder", _config_string, "\"\"", "HALO_GPU_GLSL_FOLDER", _environment_value, _platform_android,
 		"A folder to write each shader the game draws with to, as GLSL named by its\n"
 		"hash (the names gpu_capture logs); the folder must exist. Empty for none." },
