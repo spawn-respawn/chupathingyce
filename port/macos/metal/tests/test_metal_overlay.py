@@ -87,6 +87,8 @@ const unsigned int *const ui_prompt_icons[10] = {
 };
 int platform_prompt_scheme(void) { return input_scheme; }
 unsigned long config_changes(void) { return 0; }
+/* (source/interface/progress_bar.c's: no loading bar up, so the overlay draws) */
+unsigned char progress_bar_is_active(void) { return 0; }
 void platform_log(const char *format, ...) { (void)format; }
 int text_hires_font_file(int large, char *path, unsigned long size) { (void)large; (void)size; path[0] = 0; return 0; }
 int posix_ui_font_use_file(int font, const char *path) { (void)font; (void)path; return 0; }

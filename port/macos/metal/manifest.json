@@ -48,7 +48,7 @@
     },
     "port_config.c": {
       "with": "platform/port_config.c",
-      "base": "6b34de3ee07f9e44c6c52e4eb79e021bcb8f3077",
+      "base": "24b5fc95bce44351aa130ee6deb262ad17be7cd9",
       "upstream_base": "e01e714c01ec4c28c87551e3ee737776a63b7805",
       "why": "The Metal renderer's own settings (debug.metal_*, display.* that only Metal reads); every other setting is upstream's, as upstream has it (tests/test_metal_settings_parity.py)."
     },

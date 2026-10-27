@@ -39,14 +39,61 @@ ENTRY = re.compile(r'^\t\{ "(?P<name>[a-z0-9_]+\.[a-z0-9_]+)",\s*(?P<type>_confi
 ANY_ENTRY = re.compile(r'^\t\{ "[a-z0-9_]+\.[a-z0-9_]+", _config_\w+', re.M)
 DEFAULT_MACRO = re.compile(r"^#define (DEFAULT_\w+) (.+)$", re.M)
 QUOTED_NAME = re.compile(r'"([a-z0-9_]+\.[a-z0-9_]+)"')
+# a console's macros (halo_console_features.h, the consoles' compile lines): never defined on the desktop
+CONSOLE_MACRO = re.compile(r"^HALO_(?:CONSOLE_\w+|\w+_CONSOLE)$")
+CONDITIONAL = re.compile(r"^#\s*(?P<directive>ifdef|ifndef|if|else|elif|endif)\b\s*(?P<macro>\w*)")
 
 
-def registry(text: str) -> tuple[dict[str, tuple[str, str, str]], list[str]]:
-    """the settings a port_config.c registers (name -> type, default, environment variable), and
-    the names it registers more than once"""
+def desktop_lines(text: str, desktop_only: bool = False) -> str:
+    """the text with each #ifdef/#ifndef on a console macro that has an #else down to the desktop's
+    branch: an entry with a console default and a desktop one is one setting, not two. A console
+    block without an #else keeps its lines too, unless desktop_only (then only what a desktop
+    build compiles is left: a console's own settings are not the Mac's to carry). Every other
+    conditional keeps all its lines"""
+    lines = text.splitlines(keepends=True)
+    # the conditionals that have an #else or #elif, by the line that opens them
+    alternatives: set[int] = set()
+    opened: list[int] = []
+    for number, line in enumerate(lines):
+        conditional = CONDITIONAL.match(line)
+        if not conditional:
+            continue
+        if conditional["directive"] in ("ifdef", "ifndef", "if"):
+            opened.append(number)
+        elif conditional["directive"] in ("else", "elif") and opened:
+            alternatives.add(opened[-1])
+        elif conditional["directive"] == "endif" and opened:
+            opened.pop()
+    kept = []
+    # each open conditional: whether it is decided for the desktop, and whether its current branch is kept
+    stack: list[tuple[bool, bool]] = []
+    for number, line in enumerate(lines):
+        conditional = CONDITIONAL.match(line)
+        if conditional:
+            directive, macro = conditional["directive"], conditional["macro"]
+            if directive in ("ifdef", "ifndef", "if"):
+                console = (directive != "if" and (desktop_only or number in alternatives)
+                           and bool(CONSOLE_MACRO.match(macro)))
+                stack.append((console, directive == "ifndef" if console else True))
+            elif directive in ("else", "elif") and stack:
+                console, active = stack[-1]
+                stack[-1] = (console, not active if console else True)
+            elif directive == "endif" and stack:
+                stack.pop()
+            kept.append(line)
+            continue
+        if all(active for _, active in stack):
+            kept.append(line)
+    return "".join(kept)
+
+
+def registry(text: str, desktop_only: bool = False) -> tuple[dict[str, tuple[str, str, str]], list[str]]:
+    """the settings a port_config.c registers (name -> type, default, environment variable), with
+    the desktop's default where a console has its own, and the names it registers more than once;
+    desktop_only, only those a desktop build registers"""
     found: dict[str, tuple[str, str, str]] = {}
     twice = []
-    for entry in ENTRY.finditer(text):
+    for entry in ENTRY.finditer(desktop_lines(text, desktop_only)):
         if entry["name"] in found:
             twice.append(entry["name"])
         environment = entry["env"].strip('"')
@@ -69,10 +116,13 @@ def problems(upstream: str, fork: str, names_read: set[str],
     upstream_entries, upstream_twice = registry(upstream)
     metal_entries, twice = registry(fork)
     # NULL environment variables belong to console-only settings; Metal is a desktop build.
-    wanted = {name: entry for name, entry in upstream_entries.items() if entry[2] != "NULL"}
+    upstreams = {name: entry for name, entry in upstream_entries.items() if entry[2] != "NULL"}
     have = {name: entry for name, entry in metal_entries.items() if entry[2] != "NULL"}
+    # what Metal must register: what upstream registers on the desktop (a setting inside a
+    # console's own block, #ifdef HALO_SWITCH_CONSOLE, is that console's: its readers are too)
+    wanted = set(upstreams) & set(registry(upstream, desktop_only=True)[0])
     found = []
-    for name in sorted(set(wanted) - set(have)):
+    for name in sorted(wanted - set(have)):
         found.append(f"{name} is registered upstream but not by the Metal port_config.c: code that asks for it "
                      "gets 'no such setting' (logged at every call) and 0. Reconcile platform/port_config.c "
                      "with port/linux/src/port_config.c (tools/metal_manifest.py check names the commits)")
@@ -81,8 +131,9 @@ def problems(upstream: str, fork: str, names_read: set[str],
     for name in sorted(set(upstream_twice)):
         found.append(f"{name} is registered more than once by upstream's port_config.c")
     differing = set()
-    for name in sorted(set(wanted) & set(have)):
-        for what, up, mac in zip(("type", "default", "environment variable"), wanted[name], have[name], strict=True):
+    for name in sorted(set(upstreams) & set(have)):
+        for what, up, mac in zip(("type", "default", "environment variable"), upstreams[name], have[name],
+                                 strict=True):
             if up != mac:
                 differing.add(name)
                 if name not in intentional:
@@ -95,7 +146,7 @@ def problems(upstream: str, fork: str, names_read: set[str],
                          "default would differ without their own entries showing it")
     for name in sorted(set(intentional) - differing):
         found.append(f"{name} is in INTENTIONAL_DIFFERENCES but no longer differs: remove it")
-    for name in sorted(set(have) - set(wanted)):
+    for name in sorted(set(have) - set(upstreams)):
         if name not in names_read:
             found.append(f"{name} is registered only by the Metal port_config.c and nothing reads it: a "
                          "setting that does nothing; remove it or read it")
@@ -123,7 +174,7 @@ class SettingsParityTests(unittest.TestCase):
             text = path.read_text()
             self.assertGreater(len(ANY_ENTRY.findall(text)), 100)
             found, duplicates = registry(text)
-            self.assertEqual(len(found) + len(duplicates), len(ANY_ENTRY.findall(text)), path.name)
+            self.assertEqual(len(found) + len(duplicates), len(ANY_ENTRY.findall(desktop_lines(text))), path.name)
 
     def test_macos_64_bit_accepts_the_new_desktop_defaults(self):
         # HALO_64BIT, without HALO_SERVER or HALO_ANDROID, is how tools/lp64_build.py
@@ -148,6 +199,36 @@ class SettingsParityTests(unittest.TestCase):
         found = problems(self.ENTRY_A + self.ENTRY_B + self.MACRO_B, self.ENTRY_B + self.MACRO_B, set())
         self.assertEqual(len(found), 1)
         self.assertIn("display.a is registered upstream but not by the Metal", found[0])
+
+    CONSOLE_A = ('#ifdef HALO_CONSOLE_A_FEATURE\n' + ENTRY_A.split('\n')[0] + '\n#else\n'
+                 + ENTRY_A.split('\n')[0].replace('"true"', '"false"') + '\n#endif\n\t\t"A." },\n')
+
+    def test_a_console_alternative_is_one_setting_with_the_desktop_default(self):
+        values, duplicates = registry(self.CONSOLE_A)
+        self.assertEqual(duplicates, [])
+        self.assertEqual(values["display.a"][1], '"false"')
+        values, _ = registry(self.CONSOLE_A.replace("#ifdef", "#ifndef"))
+        self.assertEqual(values["display.a"][1], '"true"')
+        self.assertEqual(problems(self.CONSOLE_A, self.CONSOLE_A, set()), [])
+
+    def test_a_consoles_own_setting_is_not_wanted_on_metal(self):
+        switch_only = "#ifdef HALO_SWITCH_CONSOLE\n" + self.ENTRY_A + "#endif\n"
+        self.assertEqual(problems(switch_only + self.ENTRY_B + self.MACRO_B, self.ENTRY_B + self.MACRO_B, set()), [])
+        # (one a desktop compiles is still wanted: #ifndef, or the console's #else)
+        found = problems(switch_only.replace("#ifdef", "#ifndef"), "", set())
+        self.assertEqual(len(found), 1)
+        self.assertIn("display.a is registered upstream but not by the Metal", found[0])
+        # (and one Metal carries anyway is checked against upstream's, not called Metal's own)
+        self.assertEqual(problems(switch_only, self.ENTRY_A, set()), [])
+        self.assertEqual(len(problems(switch_only, self.ENTRY_A.replace('"true"', '"false"'), set())), 1)
+
+    def test_a_console_block_without_an_else_keeps_its_entries(self):
+        values, duplicates = registry("#ifdef HALO_SWITCH_CONSOLE\n" + self.ENTRY_A + "#endif\n")
+        self.assertEqual((list(values), duplicates), (["display.a"], []))
+
+    def test_a_non_console_conditional_keeps_every_entry(self):
+        text = "#ifdef HALO_GAME_BROWSER\n" + self.ENTRY_A + "#else\n" + self.ENTRY_A + "#endif\n"
+        self.assertEqual(registry(text)[1], ["display.a"])
 
     def test_a_duplicate_is_found(self):
         found = problems(self.ENTRY_A, self.ENTRY_A + self.ENTRY_A, set())

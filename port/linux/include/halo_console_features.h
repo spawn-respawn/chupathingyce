@@ -24,6 +24,12 @@ HALO_CONSOLE_GPU_RESOURCE_HOOKS
 	halo_resource_wait, weak in port/linux/src/d3d8_resources.c, defined
 	for real by the console's renderer), and a busy dynamic vertex buffer
 	gets other storage instead of waiting
+HALO_CONSOLE_LIGHT_LIMITS
+	the dynamic light limits on by default: of the dynamic lights on the
+	screen, the 8 largest light the level and the 2 largest add their
+	specular highlights (display.dynamic_light_limit and
+	display.specular_light_limit, source/objects/object_lights.c). The
+	desktop builds default both to 0, every light lit as before, and opt in
 HALO_CONSOLE_NO_WRITE_WATCH
 	a console that will not write-protect guest memory, so the renderer's
 	write watch cannot see the game write a resource: locks and file reads
@@ -117,6 +123,13 @@ HALO_CONSOLE_OVERSIZED_MAPS
 	not fit the tag cache says so (source/cache/cache_files_windows.c,
 	cache_files.c). The retail maps fit their own and are cached as before.
 	The desktop builds with map packs (HALO_MAP_LIST) have it too
+HALO_CONSOLE_PARTICLE_TICKS
+	the particles not attached to an object moved once a 30 Hz tick, as on
+	the Xbox, and drawn between their ticks, by default
+	(display.particle_ticks, source/effects/particles.c): two in three of
+	their collision tests spared at 60 frames a second. The desktop builds
+	default to moving them at every frame drawn, smooth at high refresh
+	rates, and opt in
 
 A big-endian console (HALO_BIG_ENDIAN, its prefix header) reads the maps,
 which are the Xbox's, little-endian, through port/console/game's byte swap
@@ -130,15 +143,18 @@ compile lines: source/cseries/xbox_address.h).
 #define __HALO_CONSOLE_FEATURES_H
 
 #ifdef HALO_SWITCH_CONSOLE
+#define HALO_CONSOLE_PARTICLE_TICKS 1
 #define HALO_CONSOLE_GPU_RESOURCE_HOOKS 1
 #define HALO_CONSOLE_NO_WRITE_WATCH 1
 #define HALO_CONSOLE_HOST_ART 1
 #define HALO_CONSOLE_MAP_LOAD_HOOKS 1
 #define HALO_CONSOLE_STATUS_LINE 1
 #define HALO_CONSOLE_LOG_THROTTLE 1
+#define HALO_CONSOLE_LIGHT_LIMITS 1
 #endif
 
 #ifdef HALO_WIIU_CONSOLE
+#define HALO_CONSOLE_PARTICLE_TICKS 1
 #define HALO_CONSOLE_NO_WRITE_WATCH 1
 #define HALO_CONSOLE_LOG_THROTTLE 1
 #define HALO_CONSOLE_WINDOW_MAXIMUM 0x10000000UL
@@ -148,12 +164,15 @@ compile lines: source/cseries/xbox_address.h).
 #define HALO_CONSOLE_ONLINE_GAMES 1
 #define HALO_CONSOLE_WAIT_POLL 1
 #define HALO_CONSOLE_GL_LAYER 1
+#define HALO_CONSOLE_LIGHT_LIMITS 1
 #endif
 
 #ifdef HALO_XBOX_CONSOLE
+#define HALO_CONSOLE_PARTICLE_TICKS 1
 #define HALO_CONSOLE_LOG_BUFFER 1
 #define HALO_CONSOLE_ONLINE_GAMES 1
 #define HALO_CONSOLE_OVERSIZED_MAPS 1
+#define HALO_CONSOLE_LIGHT_LIMITS 1
 #endif
 
 /* (the desktop builds copy maps to the Xbox's cache files too: a map pack's
@@ -163,12 +182,14 @@ larger maps take a campaign map's there as well) */
 #endif
 
 #ifdef HALO_XBOX360_CONSOLE
+#define HALO_CONSOLE_PARTICLE_TICKS 1
 #define HALO_CONSOLE_NO_WRITE_WATCH 1
 #define HALO_CONSOLE_DEBUG_CHANNEL 1
 #define HALO_CONSOLE_HALT_TO_LAUNCHER 1
 #define HALO_CONSOLE_GL_LAYER 1
 #define HALO_CONSOLE_XBOX_RENDER_SIZES 1
 #define HALO_CONSOLE_ONLINE_GAMES 1
+#define HALO_CONSOLE_LIGHT_LIMITS 1
 #ifdef HALO_CONSOLE_DEBUG_TOOLS
 #define HALO_CONSOLE_BRINGUP_LOG 1
 #endif
